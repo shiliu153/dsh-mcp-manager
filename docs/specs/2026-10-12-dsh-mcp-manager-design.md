@@ -48,7 +48,7 @@ dsh-mcp/                                ← GitHub 仓库,topic: dsh-plugin
 
 ## 2. Host 插件设计(插件的功能面)
 
-`index.js` 采用官方 Host 导出形式一:`export function apply(ctx, config)` + `export const Config`(声明 Config 即在激活时校验行 config)。在 `apply` 内经 `ctx.effect`/`ctx.on` 注册管理工具(工具经 DSH 权限系统,逐调用走审批,与官方 `plugin_manager` 工具行为一致):
+`index.js` 采用官方 Host 导出形式一:`export function apply(ctx)` + `export const inject = ['tools']`(不声明 Config,见 §3 v2a 修订)。在 `apply` 内经 `ctx.effect` 注册管理工具;工具定义按官方 `dsh-mcp-client` 的手工构造形状(`{name, description, parameters, output: {schema, render}, execute}`,直接 `ctx.tools.register(definition)`,不依赖 `defineTool` 导入),参数 schema 为内嵌 JSON Schema 对象。工具逐调用经 DSH 权限系统审批(与官方工具一致):
 
 | 工具 | 作用 |
 |---|---|
@@ -63,11 +63,18 @@ dsh-mcp/                                ← GitHub 仓库,topic: dsh-plugin
 
 写路径安全门(与 v1 相同,移入 lib 由插件工具与 CLI 共用):文本手术只做在候选副本 → `loadOptionalPatches("dsh", candidate)` 校验 → 原子落盘(临时文件+rename)→ 落盘前留 `.bak` → 写前核对 mtime。
 
+### 2.1 结构化读取的两条实现路径(asar 约束)
+
+官方技能明言:`app.asar` 只有 Host 进程自己的文件读取能打开,shell/ripgrep/node 直接读会失败。因此 `loadOptionalPatches()` 桥接有两条路径:
+
+- **插件内**:bundle 以普通包文件随 profile 安装在 profile 的 `node_modules`,Host 插件进程内动态 `import()` 可正常解析依赖域;从 `process.execPath`(…/DeepSeek Harness.exe)推导 asar 内 `dsh-app-boot` 的 file:// URL(同 `validate_patch.js` 的既有先例,注意空格百分号编码),动态 import 后调用 `loadOptionalPatches("dsh", path)`;导入失败时降级为纯文本手术(§2.2 的块边界规则不依赖结构化读取);
+- **CLI 独立使用**:桥接脚本经由 DeepSeek Harness 自带 node 运行时跑(port 目录 `validate_patch.js` 先例);直接 `node` 跑同样可行——`validate_patch.js` 正是普通 node 跑通的,说明该 import 路径在用户态 node 亦可解析(asar 路径由 Electron 的 fs 钩子之外的场景经 Node 的 asar 支持处理)。CLI 首选此路径,失败则给出降级提示。
+
 ## 3. 官方合规清单(add 与 CI 都按此逐项检查)
 
 清单 manifest(host-plugin.md):
 - [ ] `name` 唯一(建议 `@<owner>/dsh-mcp-manager` 形态)、`version` 合法、`"private": true`(不发布 npm,仅供 GitHub/路径安装,官方模板同款);
-- [ ] `"type": "module"`;Host 行 `config: {}` 且插件声明 `export const Config`;
+- [ ] `"type": "module"`;Host 行不带 `config` 字段、插件不声明 `Config`(v2a 修订:官方 decoration 模板的 Host 插件即无 Config;声明 Config 需引入 `@deepseek-ai/schemastery` 依赖,存在 profile 解析域版本错配风险;插件无用户可调项时官方最小形态即正确);
 - [ ] `dsh.bundle.patch` 指向随包 patch;patch 方言为顶层数组 `- insert: [- id, name, config]`;`exports` 含 `".": "./index.js"`、`"./package.json"`、`"./locale/*.json"`,与 `files` 对齐(locale、icon);
 - [ ] 显示元数据:`locale/en.json`(`meta.title/description`)+ `locale/zh.json` + 顶层 `icon`(相对路径、SVG/PNG/JPEG/WebP ≤256KiB、不越出包目录、不用符号链接逃逸),`exports` 暴露 `./package.json`、`./locale/*.json`,`files` 列出 locale 与 icon;
 - [ ] 无安装脚本、无构建工具依赖(Host-only bundle 不需要 dependencies)。
