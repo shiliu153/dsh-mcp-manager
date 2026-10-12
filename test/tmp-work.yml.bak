@@ -1,0 +1,25 @@
+- insert:
+    # keep this comment
+    - id: mcp-alpha
+      disabled: true
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: alpha
+        transport: stdio
+        command: npx
+        args: ['-y', 'alpha-mcp']
+    - id: mcp-beta
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: beta
+        transport: streamable-http
+        url: https://example.invalid/mcp
+- id: mcp-gamma
+  name: '@deepseek-ai/dsh-mcp-client'
+  disabled: true
+  config:
+    serverName: gamma
+    transport: stdio
+    command: node
+    env:
+      GAMMA_TOKEN: !!js require('fs').readFileSync('C:/Users/x/gamma-token.txt', 'utf8').trim()
