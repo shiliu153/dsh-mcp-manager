@@ -1,0 +1,84 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { applySurgery, applySurgeryAsync, renderEntryRow } from '../lib/patchfile.js';
+
+function tmpPatch(content) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dshmcp-'));
+  const file = path.join(dir, 'cordis.patch.yml');
+  fs.writeFileSync(file, content);
+  return file;
+}
+const SAMPLE = fs.readFileSync(new URL('./fixtures/patch-sample.yml', import.meta.url), 'utf8');
+
+test('appendEntry writes, backs up, and validates', async () => {
+  const file = tmpPatch(SAMPLE);
+  const row = renderEntryRow({ id: 'mcp-delta', name: '@deepseek-ai/dsh-mcp-client', config: { serverName: 'delta', transport: 'stdio', command: 'npx', args: ['-y', 'delta'] } });
+  const r = await applySurgeryAsync({ file, operation: { type: 'appendEntry', row } });
+  assert.equal(r.applied, true);
+  assert.ok(fs.existsSync(file + '.bak'));
+  assert.ok(fs.readFileSync(file, 'utf8').includes('serverName: delta'));
+});
+
+test('remove of missing id throws and leaves live file untouched', async () => {
+  const file = tmpPatch(SAMPLE);
+  const before = fs.readFileSync(file, 'utf8');
+  await assert.rejects(() => applySurgeryAsync({ file, operation: { type: 'remove', id: 'nope' }, validate: false }), /entry not found/);
+  assert.equal(fs.readFileSync(file, 'utf8'), before);
+});
+
+test('setDisabled works via pipeline (validate:false)', async () => {
+  const file = tmpPatch(SAMPLE);
+  const r = applySurgery({ file, operation: { type: 'setDisabled', id: 'mcp-gamma', value: false } });
+  assert.equal(r.applied, true);
+  assert.ok(fs.readFileSync(file, 'utf8').match(/mcp-gamma[\s\S]*?disabled:\s*false/));
+});
+
+test('sync pipeline refuses the validation gate', () => {
+  const file = tmpPatch(SAMPLE);
+  assert.throws(() => applySurgery({ file, operation: { type: 'setDisabled', id: 'mcp-gamma', value: true }, validate: true }), /applySurgeryAsync/);
+});
+
+test('stale expectMtime aborts with FileChangedExternally', async () => {
+  const file = tmpPatch(SAMPLE);
+  await assert.rejects(
+    () => applySurgeryAsync({ file, operation: { type: 'setDisabled', id: 'mcp-gamma', value: true }, validate: false, expectMtime: 1 }),
+    /FileChangedExternally/,
+  );
+});
+
+test('failing validation keeps candidate file and live file untouched', async () => {
+  const file = tmpPatch(SAMPLE);
+  const before = fs.readFileSync(file, 'utf8');
+  await assert.rejects(() => applySurgeryAsync({
+    file,
+    validate: true,
+    operation: { type: 'appendEntry', row: { id: 'x', name: 'y', configLines: ['config:', '\tbroken: "unclosed'] } },
+  }), /candidate failed validation/);
+  assert.equal(fs.readFileSync(file, 'utf8'), before);
+  assert.ok(fs.existsSync(file + '.candidate'), 'candidate kept for inspection');
+});
+
+test('validation-gated happy path succeeds on a real parseable candidate', async () => {
+  const file = tmpPatch(SAMPLE);
+  const row = renderEntryRow({ id: 'mcp-delta', name: '@deepseek-ai/dsh-mcp-client', config: { serverName: 'delta', transport: 'stdio', command: 'npx' } });
+  const r = await applySurgeryAsync({ file, operation: { type: 'appendEntry', row } });
+  assert.equal(r.applied, true);
+  assert.ok(!fs.existsSync(file + '.candidate'), 'candidate cleaned up after success');
+});
+
+test('renderEntryRow keeps !!js lines verbatim and sorts config keys', () => {
+  const row = renderEntryRow({
+    id: 'x', name: '@deepseek-ai/dsh-mcp-client',
+    config: {
+      serverName: 'x', transport: 'stdio', command: 'npx',
+      env: { T: "!!js require('fs').readFileSync('t.txt','utf8').trim()" },
+    },
+  });
+  const text = row.configLines.join('\n');
+  assert.ok(text.includes("!!js require('fs')"));
+  const keys = row.configLines.filter(l => /^ {4}\w/.test(l)).map(l => l.trim().split(':')[0]);
+  assert.deepEqual(keys, [...keys].sort());
+});
