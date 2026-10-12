@@ -11,5 +11,6 @@
     "./locale/*.json": "./locale/*.json"
   },
   "files": ["index.js", "lib/", "cli/", "locale/", "icon.svg", "assets/"],
+  "icon": "./icon.svg",
   "dsh": { "bundle": { "patch": "./cordis.patch.yml" } }
 }
