@@ -1,6 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { fileURLToPath } from 'node:url';
+import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { createRoutes, ROUTE_PREFIX } from '../lib/server.js';
 
@@ -78,4 +80,69 @@ test('GET /servers answers 500 with a structured error when the patch is unreada
   assert.equal(res.status, 500);
   const body = await res.json();
   assert.equal(body.error.code, 'internal');
+});
+
+// ---- write routes: every test runs on a throwaway copy, never the fixture ----
+
+function copyFixture() {
+  const dst = path.join(os.tmpdir(), `patch-${process.pid}-${Math.random().toString(36).slice(2)}.yml`);
+  fs.copyFileSync(fixture, dst);
+  return dst;
+}
+
+const post = (route, body) => route.fetch(new Request(`http://127.0.0.1${route.path}`, {
+  method: 'POST',
+  headers: { 'content-type': 'application/json' },
+  body: JSON.stringify(body),
+}));
+
+test('POST /toggle flips disabled and keeps comments intact', async () => {
+  const file = copyFixture();
+  const routes = createRoutes(fakeCtx(), { patchPath: file });
+  const res = await post(routeFor(routes, 'POST', '/toggle'), { id: 'mcp-alpha', disabled: true });
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.equal(body.id, 'mcp-alpha');
+  assert.equal(body.disabled, true);
+  assert.ok(body.backup.endsWith('.bak'));
+  const text = fs.readFileSync(file, 'utf8');
+  assert.match(text, /# keep this comment/, 'comment block must survive the surgery');
+  assert.match(text, /- id: mcp-alpha\n(?:.*\n)*?  disabled: true/);
+});
+
+test('POST /toggle rejects a bad body and an unknown id', async () => {
+  const file = copyFixture();
+  const routes = createRoutes(fakeCtx(), { patchPath: file });
+  const toggle = routeFor(routes, 'POST', '/toggle');
+  const noId = await post(toggle, { disabled: true });
+  assert.equal(noId.status, 400);
+  assert.equal((await noId.json()).error.code, 'bad_request');
+  const noBool = await post(toggle, { id: 'mcp-alpha', disabled: 'yes' });
+  assert.equal(noBool.status, 400);
+  const missing = await post(toggle, { id: 'nope', disabled: true });
+  assert.equal(missing.status, 404);
+  assert.equal((await missing.json()).error.code, 'not_found');
+});
+
+test('POST /remove deletes the entry and keeps the rest', async () => {
+  const file = copyFixture();
+  const routes = createRoutes(fakeCtx(), { patchPath: file });
+  const res = await post(routeFor(routes, 'POST', '/remove'), { id: 'mcp-beta' });
+  assert.equal(res.status, 200);
+  assert.equal((await res.json()).id, 'mcp-beta');
+  const text = fs.readFileSync(file, 'utf8');
+  assert.ok(!text.includes('mcp-beta'), 'entry gone');
+  assert.ok(text.includes('mcp-alpha'), 'sibling kept');
+  assert.match(text, /# keep this comment/, 'comment kept');
+});
+
+test('POST endpoints reject malformed JSON', async () => {
+  const file = copyFixture();
+  const routes = createRoutes(fakeCtx(), { patchPath: file });
+  const route = routeFor(routes, 'POST', '/toggle');
+  const res = await route.fetch(new Request(`http://127.0.0.1${route.path}`, {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: '{not json',
+  }));
+  assert.equal(res.status, 400);
+  assert.equal((await res.json()).error.code, 'bad_request');
 });
