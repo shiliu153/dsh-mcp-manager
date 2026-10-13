@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
-import { parseTopBlocks, findRow, removeEntry, setDisabled, appendEntry } from '../lib/surgery.js';
+import { parseTopBlocks, findRow, removeEntry, setDisabled, appendEntry, readConfigBlock, replaceConfigBlock } from '../lib/surgery.js';
 
 const dir = path.dirname(fileURLToPath(import.meta.url));
 const sample = readFileSync(path.join(dir, 'fixtures/patch-sample.yml'), 'utf8');
@@ -105,4 +105,90 @@ test('a lone CR is treated as a line ending too', () => {
   assert.equal(blocks.length, 2);
   assert.deepEqual(blocks[0].rows.map(r => r.id), ['mcp-alpha', 'mcp-beta']);
   assert.equal(blocks[1].id, 'mcp-gamma');
+});
+
+// ---- config subtree: read, replace, and the row-boundary defect that hid behind flow-style args ----
+
+const blocky = readFileSync(path.join(dir, 'fixtures/patch-block-args.yml'), 'utf8');
+
+test('a block-style args sequence does not truncate the row', () => {
+  const row = findRow(blocky, 'mcp-blocky');
+  const lines = blocky.split('\n').slice(row.startLine, row.endLine + 1);
+  assert.ok(lines.some(l => /^\s*- blocky-mcp@1\.0\.0\s*$/.test(l)), 'the nested sequence item must stay inside the row');
+  assert.ok(lines.some(l => /serverName: blocky/.test(l)));
+});
+
+test('setDisabled keeps a block-style args row intact', () => {
+  const out = setDisabled(blocky, 'mcp-blocky', true);
+  assert.ok(out.includes('blocky-mcp@1.0.0'), 'args survive the edit');
+  assert.ok(out.includes('serverName: next'), 'the following row is untouched');
+  assert.ok(/^\s*disabled: true\s*$/m.test(out));
+});
+
+test('readConfigBlock returns the dedented subtree and its indent', () => {
+  const b = readConfigBlock(sample, 'mcp-alpha');
+  assert.equal(b.kind, 'block');
+  assert.equal(b.indent, 8);           // insert row: id at 4 -> config at 6 -> subtree at 8
+  assert.equal(b.baseIndent, 8);
+  assert.equal(b.configText, ["serverName: alpha", "transport: stdio", "command: npx", "args: ['-y', 'alpha-mcp']"].join('\n'));
+});
+
+test('readConfigBlock handles bare entries, flow config and absent config', () => {
+  assert.equal(readConfigBlock(sample, 'mcp-gamma').kind, 'block');
+  assert.equal(readConfigBlock(sample, 'mcp-gamma').indent, 4);
+  assert.equal(readConfigBlock(sample, 'nope'), undefined);
+
+  const flow = "- id: mcp-f\n  name: 'x'\n  config: {serverName: f, transport: stdio, command: node}\n";
+  const f = readConfigBlock(flow, 'mcp-f');
+  assert.equal(f.kind, 'flow');
+  assert.equal(f.configText, '{serverName: f, transport: stdio, command: node}');
+
+  const absent = "- id: mcp-a\n  name: 'x'\n";
+  assert.equal(readConfigBlock(absent, 'mcp-a').kind, 'absent');
+  assert.equal(readConfigBlock(absent, 'mcp-a').indent, 4);
+});
+
+test('replaceConfigBlock round-trips byte-for-byte and preserves everything outside', () => {
+  const b = readConfigBlock(sample, 'mcp-alpha');
+  const out = replaceConfigBlock(sample, 'mcp-alpha', b.configText);
+  assert.equal(out, sample, 'an unedited subtree must reproduce the file exactly');
+});
+
+test('replaceConfigBlock rewrites only the subtree, keeping id/name/comments', () => {
+  // Pasted with a common 2-space indent, as a user would: the common prefix is
+  // stripped and the fragment is re-indented to the entry's own depth.
+  const fragment = ['  serverName: alpha', '  transport: stdio', '  command: npx', "  args: ['x']"].join('\n');
+  const out = replaceConfigBlock(sample, 'mcp-alpha', fragment);
+  assert.ok(out.includes('# keep this comment'));
+  assert.ok(out.includes('    - id: mcp-alpha'));
+  assert.ok(out.includes("      name: '@deepseek-ai/dsh-mcp-client'"));
+  assert.ok(out.includes('        serverName: alpha'));
+  assert.ok(out.includes('        command: npx'));
+  assert.ok(out.includes("        args: ['x']"));
+  assert.ok(out.includes('mcp-beta') && out.includes('mcp-gamma'));
+});
+
+test('replaceConfigBlock replaces a flow config in place and rejects multi-line input', () => {
+  const flow = "- id: mcp-f\n  name: 'x'\n  config: {serverName: f}\n";
+  const out = replaceConfigBlock(flow, 'mcp-f', '{serverName: f, transport: stdio, command: node}');
+  assert.ok(out.includes('  config: {serverName: f, transport: stdio, command: node}'));
+  assert.throws(() => replaceConfigBlock(flow, 'mcp-f', 'a: 1\nb: 2'), /single line/);
+});
+
+test('replaceConfigBlock inserts a config line when the entry has none', () => {
+  const absent = "- id: mcp-a\n  name: '@deepseek-ai/dsh-mcp-client'\n";
+  const out = replaceConfigBlock(absent, 'mcp-a', 'serverName: a\ntransport: stdio\ncommand: node');
+  assert.equal(out, [
+    '- id: mcp-a',
+    "  name: '@deepseek-ai/dsh-mcp-client'",
+    '  config:',
+    '    serverName: a',
+    '    transport: stdio',
+    '    command: node',
+    '',
+  ].join('\n'));
+});
+
+test('replaceConfigBlock throws for an unknown id', () => {
+  assert.throws(() => replaceConfigBlock(sample, 'nope', 'a: 1'), /entry not found: nope/);
 });
