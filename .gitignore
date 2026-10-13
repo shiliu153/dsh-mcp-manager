@@ -1,3 +1,7 @@
 node_modules/
 *.log
 .claude/
+# CLI tests operate on throwaway copies under test/; the write pipeline leaves a
+# .bak beside each one. Neither is a source file.
+test/tmp-*.yml
+test/tmp-*.yml.bak

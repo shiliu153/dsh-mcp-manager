@@ -1,6 +1,6 @@
 ---
 name: dsh-mcp-manager
-description: Use when the user wants to manage MCP servers in DeepSeek Harness (DSH) — list or probe registered servers, install a new one from a pasted project address (npm package, GitHub repo, MCP endpoint URL, or JSON config), enable/disable or remove a server, or rotate a server credential. Also use when the user reports an MCP tool is missing or failing.
+description: Use when the user wants to manage MCP servers in DeepSeek Harness (DSH) — list or probe registered servers, install a new one from a pasted project address (npm package, GitHub repo, MCP endpoint URL, or JSON config), change an existing server's configuration, enable/disable or remove a server, or rotate a server credential. Also use when the user reports an MCP tool is missing or failing.
 ---
 
 # DSH MCP Manager
@@ -20,12 +20,21 @@ confirmation.
    explicit approval. Only then re-run with `confirm: true`. The tool validates
    the candidate against the official mcp-client rules and probes the new server
    afterwards — report probe result (tool count, or the exact failure reason).
-3. **Toggle / remove**: always confirm intent in conversation first, then call
+3. **Change an existing server's config**: call `mcp_manager_update` with `id` and
+   the new `config` subtree as YAML. It dry-runs too: show the normalized text and
+   the rule/secret/uniqueness checks, then re-run with `confirm: true`. Get the
+   current subtree first — `mcp_manager_list` gives ids, and the CLI's
+   `show <id>` prints the exact text to edit (verbatim, so it can be piped back).
+   The tool may write `!!js` expressions (it is as trusted as hand-editing the
+   patch); the Web panel may not — it only ever sees `!!js «k»` placeholders that
+   the host refills. Say so if the user asks to change a credential reference.
+4. **Toggle / remove**: always confirm intent in conversation first, then call
    `mcp_manager_toggle` / `mcp_manager_remove` with `confirm: true`.
-4. **Diagnose**: `mcp_manager_probe --id <id>` gives the real handshake outcome
+5. **Diagnose**: `mcp_manager_probe --id <id>` gives the real handshake outcome
    (spawn failure / timeout / HTTP status / tool list). Fix the entry (toggle,
-   re-add with corrected input) rather than guessing.
-5. **Report**: new tools are `mcp__<serverName>__<tool>` and appear in **new**
+   re-add with corrected input, `mcp_manager_update` the config) rather than
+   guessing.
+6. **Report**: new tools are `mcp__<serverName>__<tool>` and appear in **new**
    sessions; tell the user so if the current session cannot see them yet.
 
 ## Rules
@@ -35,6 +44,10 @@ confirmation.
 - Never hand-edit the patch file while this bundle manages it — the guarded
   pipeline keeps comments intact and validates every candidate; hand edits can
   break DSH's config reload.
+- An edit replaces only the entry's `config:` subtree: `id`, `name` and
+  `disabled` are not editable there (use `mcp_manager_toggle` for the last one).
+  A candidate that fails the official rules, carries a hardcoded secret, or
+  duplicates a `serverName` is refused before it reaches the file.
 - A failing install is fixed in place; never create duplicate entries for the
   same serverName (the official loader rejects duplicate names in one scope).
 - `serverName` must match `[A-Za-z0-9_-]{1,32}`; the official transport values

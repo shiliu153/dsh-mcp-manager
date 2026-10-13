@@ -128,6 +128,7 @@ test('edit dry-runs and only writes with --yes', () => {
     assert.ok(text.includes('mcp-alpha') && text.includes('mcp-beta'), 'siblings untouched');
   } finally {
     fs.rmSync(copy, { force: true });
+    fs.rmSync(copy + '.bak', { force: true });
     fs.rmSync(cfg, { force: true });
   }
 });
