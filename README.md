@@ -100,15 +100,20 @@ guarded pipeline as the CLI.
 Entries follow the official `@deepseek-ai/dsh-mcp-client` contract exactly:
 
 ```yaml
-- id: mcp-<serverName>
-  name: '@deepseek-ai/dsh-mcp-client'
-  config:
-    serverName: <serverName>      # [A-Za-z0-9_-]{1,32}, unique
-    transport: stdio              # or streamable-http
-    command: npx                  # stdio only
-    args: ['-y', '<package>']
-    failOnStartupError: true      # recommended for fresh entries
+- insert:
+    - id: mcp-<serverName>
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: <serverName>      # [A-Za-z0-9_-]{1,32}, unique
+        transport: stdio              # or streamable-http
+        command: npx                  # stdio only
+        args: ['-y', '<package>']
+        failOnStartupError: true      # default for rows this plugin writes
 ```
+
+A new server goes inside its own `insert:` list. A bare top-level entry overrides
+an *existing* row by id, and the loader warns about and skips one that matches no
+row — so appending a bare entry, however well-formed, never mounts a new server.
 
 Secrets are never written into the patch: the tool stores them in a credential
 file and references it with a `!!js` expression (the same pattern the official
@@ -130,6 +135,11 @@ reproduces the file exactly, which is what the test suite asserts.
   DSH's own loader, pass the official field rules, carry no hardcoded secret, and
   keep every `serverName` unique. A rejected candidate never reaches the live
   file.
+- An **add** is gated before the write as well as after it: the candidate row
+  must sit inside an insert list, must parse back through the loader with a
+  `serverName`, and must not duplicate one already registered. The same check
+  then runs against the persisted row before the probe, so `probe OK` can only
+  describe a row that is really in the file.
 - The panel holds an edit as raw text while you type, so it echoes the file's
   `mtime` back on write: if the file changed underneath, the write is refused
   with `file_changed` instead of clobbering it.
@@ -145,7 +155,7 @@ reproduces the file exactly, which is what the test suite asserts.
 ## Development
 
 ```sh
-node --test "test/*.test.mjs"   # 167 tests, zero dependencies
+node --test "test/*.test.mjs"   # 178 tests, zero dependencies
 node -e "import('./scripts/check-bundle.mjs').then(m => console.log(m.checkBundle('.')))"
 ```
 
