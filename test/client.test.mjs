@@ -144,6 +144,10 @@ function textOf(node, out = []) {
 }
 
 function renderPanel(react, subject) {
+  return textOf(renderPanelNode(react, subject)).join(' | ');
+}
+
+function renderPanelNode(react, subject) {
   const api = loadModule().factory((id) => (id === 'react' ? react : requireStub(id)));
   const registered = [];
   api.apply({
@@ -151,8 +155,95 @@ function renderPanel(react, subject) {
     locale: { register: () => {}, bind: () => (key) => key },
     slots: { inject: (n, cb) => registered.push(cb()), register: (d, c) => ({ descriptor: d, component: c }) },
   });
-  return textOf(registered[0].component({ t: (key) => key, subject })).join(' | ');
+  return registered[0].component({ t: (key) => key, subject });
 }
+
+/** Collect every className in the rendered tree. */
+function classNamesOf(node, out = []) {
+  if (node === null || node === undefined || typeof node === 'boolean') return out;
+  if (typeof node === 'string' || typeof node === 'number') return out;
+  if (Array.isArray(node)) { for (const n of node) classNamesOf(n, out); return out; }
+  if (typeof node.props?.className === 'string') out.push(node.props.className);
+  if (node.children) classNamesOf(node.children, out);
+  return out;
+}
+
+/** Find the first element carrying a given className. */
+function findByClass(node, className) {
+  if (node === null || node === undefined || typeof node === 'boolean') return undefined;
+  if (typeof node === 'string' || typeof node === 'number') return undefined;
+  if (Array.isArray(node)) {
+    for (const n of node) { const hit = findByClass(n, className); if (hit) return hit; }
+    return undefined;
+  }
+  if (node.props?.className === className) return node;
+  return node.children ? findByClass(node.children, className) : undefined;
+}
+
+// Every custom property client.js references must exist in the host theme. The
+// set below was read out of the installed dsh-client-ui-theme bundle. An
+// invented name is not an error anywhere: the declaration is simply invalid at
+// computed-value time, so the border or colour disappears silently. That is
+// exactly how the switch first shipped as a black blob -
+// --dsw-alias-border-secondary and --dsw-alias-text-primary do not exist.
+const HOST_TOKENS = new Set([
+  '--dsw-alias-label-primary',
+  '--dsw-alias-label-secondary',
+  '--dsw-alias-label-caption',
+  '--dsw-alias-label-primary-foreground',
+  '--dsw-alias-border-l2',
+  '--dsw-alias-border-l3',
+  '--dsw-alias-brand-primary',
+  '--dsw-alias-switch-thumb',
+  '--dsw-alias-interactive-bg-hover',
+  '--dsw-alias-state-business-primary',
+  '--dsw-focus-ring-width',
+  '--dsw-focus-ring-color',
+]);
+
+test('client.js references only real host theme tokens', () => {
+  // Only var() references count: a token named in a comment is prose, not a
+  // declaration, and matching those would flag the wildcard notation itself.
+  const used = [...new Set([...source.matchAll(/var\(\s*(--dsw-[a-z0-9-]+)/g)].map((m) => m[1]))].sort();
+  assert.ok(used.length >= 8, `expected the panel to reference theme tokens, found ${used.length}`);
+  const unknown = used.filter((t) => !HOST_TOKENS.has(t));
+  assert.deepEqual(unknown, [], `these theme tokens do not exist in the host theme:\n${unknown.join('\n')}`);
+});
+
+const READY_ONE = [
+  { status: 'ready', data: { patch: '/p', resourcesAvailable: true, servers: [
+    { id: 'mcp-a', serverName: 'alpha', transport: 'stdio', command: 'npx', args: ['-y', 'x'], url: '', disabled: false, live: true },
+  ] } },
+  {}, {}, '', '', null, '',
+];
+
+test('the switch copies the host primitive: aria-checked state and a thumb child', () => {
+  const node = renderPanelNode(hookReact(READY_ONE), OURS);
+  const sw = findByClass(node, 'dsh-mcp-switch');
+  assert.ok(sw, 'switch element must render');
+  assert.equal(sw.type, 'button');
+  assert.equal(sw.props.role, 'switch');
+  assert.equal(sw.props['aria-checked'], true, 'an enabled server reads as checked');
+  assert.equal(sw.props['data-on'], undefined, 'must not invent a parallel state attribute');
+  assert.ok(findByClass(sw.children, 'dsh-mcp-thumb'), 'the track needs its thumb, or it renders as a bare pill');
+});
+
+test('a disabled server renders the switch unchecked', () => {
+  const node = renderPanelNode(hookReact([
+    { status: 'ready', data: { patch: '/p', resourcesAvailable: true, servers: [
+      { id: 'mcp-b', serverName: 'beta', transport: 'stdio', command: 'node', args: [], url: '', disabled: true, live: false },
+    ] } },
+    {}, {}, '', '', null, '',
+  ]), OURS);
+  assert.equal(findByClass(node, 'dsh-mcp-switch').props['aria-checked'], false);
+});
+
+test('the panel renders the classes its stylesheet targets', () => {
+  const names = classNamesOf(renderPanelNode(hookReact(READY_ONE), OURS));
+  for (const cls of ['dsh-mcp', 'dsh-mcp-row', 'dsh-mcp-badge', 'dsh-mcp-switch', 'dsh-mcp-thumb', 'dsh-mcp-add']) {
+    assert.ok(names.includes(cls), `missing ${cls}`);
+  }
+});
 
 const OURS = { kind: 'bundle', pkg: { name: '@dsh-contrib/dsh-mcp-manager' } };
 

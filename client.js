@@ -100,31 +100,45 @@ window.__ModuleLoader__.load({
       return isOurs(props.subject) ? h(PanelBody, props) : null;
     }
 
-    // Colours are theme tokens only, so a renamed token degrades appearance
-    // rather than breaking rendering.
+    // Colours are theme tokens only. Every token below was checked against the
+    // host theme's own vocabulary (--dsw-alias-label-*, --dsw-alias-border-l*,
+    // --dsw-alias-brand-primary, ...). An invented name makes the declaration
+    // invalid at computed-value time, so the border or colour silently vanishes
+    // instead of failing loudly.
     const CSS = `
 .dsh-mcp { display: flex; flex-direction: column; gap: 12px; margin-top: 16px; }
 .dsh-mcp-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-.dsh-mcp-title { font-size: 15px; font-weight: 600; color: var(--dsw-alias-text-primary); }
-.dsh-mcp-path { font-size: 12px; color: var(--dsw-alias-text-secondary); word-break: break-all; }
+.dsh-mcp-title { font-size: 14px; font-weight: 600; color: var(--dsw-alias-label-primary); }
+.dsh-mcp-path { font-size: 12px; color: var(--dsw-alias-label-caption); word-break: break-all; }
 .dsh-mcp-list { display: flex; flex-direction: column; gap: 8px; }
-.dsh-mcp-row { border: 1px solid var(--dsw-alias-border-secondary); border-radius: 8px; padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; }
+.dsh-mcp-row { border: 1px solid var(--dsw-alias-border-l2); border-radius: 8px; padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; }
 .dsh-mcp-row-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-.dsh-mcp-id { font-weight: 600; color: var(--dsw-alias-text-primary); }
-.dsh-mcp-meta { font-size: 12px; color: var(--dsw-alias-text-secondary); }
-.dsh-mcp-target { font-family: ui-monospace, Consolas, monospace; font-size: 12px; color: var(--dsw-alias-text-secondary); word-break: break-all; }
+.dsh-mcp-id { font-weight: 600; color: var(--dsw-alias-label-primary); }
+.dsh-mcp-meta { font-size: 12px; color: var(--dsw-alias-label-secondary); }
+.dsh-mcp-target { font-family: ui-monospace, Consolas, monospace; font-size: 12px; color: var(--dsw-alias-label-caption); word-break: break-all; }
 .dsh-mcp-actions { display: flex; align-items: center; gap: 8px; margin-left: auto; }
-.dsh-mcp-badge { font-size: 12px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--dsw-alias-border-secondary); color: var(--dsw-alias-text-secondary); }
-.dsh-mcp-badge[data-state="connected"] { color: var(--dsw-alias-text-primary); }
-.dsh-mcp-result { font-size: 12px; color: var(--dsw-alias-text-secondary); }
-.dsh-mcp-button { font-size: 12px; padding: 4px 10px; border-radius: 6px; border: 1px solid var(--dsw-alias-border-secondary); background: transparent; color: var(--dsw-alias-text-primary); cursor: pointer; }
-.dsh-mcp-button:disabled { opacity: 0.5; cursor: default; }
-.dsh-mcp-switch { width: 36px; height: 20px; border-radius: 999px; border: 1px solid var(--dsw-alias-border-secondary); background: transparent; cursor: pointer; position: relative; }
-.dsh-mcp-switch[data-on="true"] { background: var(--dsw-alias-brand-primary); }
-.dsh-mcp-error { font-size: 12px; color: var(--dsw-alias-text-primary); border: 1px solid var(--dsw-alias-border-secondary); border-radius: 6px; padding: 8px 10px; }
-.dsh-mcp-add { display: flex; flex-direction: column; gap: 8px; border-top: 1px solid var(--dsw-alias-border-secondary); padding-top: 12px; }
-.dsh-mcp-input { width: 100%; min-height: 56px; resize: vertical; font-family: inherit; font-size: 13px; padding: 8px; border-radius: 6px; border: 1px solid var(--dsw-alias-border-secondary); background: transparent; color: var(--dsw-alias-text-primary); }
-.dsh-mcp-preview { font-family: ui-monospace, Consolas, monospace; font-size: 12px; white-space: pre-wrap; border: 1px solid var(--dsw-alias-border-secondary); border-radius: 6px; padding: 8px; color: var(--dsw-alias-text-secondary); }
+.dsh-mcp-badge { font-size: 12px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--dsw-alias-border-l2); color: var(--dsw-alias-label-secondary); }
+.dsh-mcp-badge[data-state="connected"] { color: var(--dsw-alias-label-primary); border-color: var(--dsw-alias-border-l3); }
+.dsh-mcp-result { font-size: 12px; color: var(--dsw-alias-label-secondary); }
+.dsh-mcp-button { font-size: 12px; padding: 4px 10px; border-radius: 6px; border: 1px solid var(--dsw-alias-border-l2); background: transparent; color: var(--dsw-alias-label-primary); cursor: pointer; }
+.dsh-mcp-button:hover:not(:disabled) { background: var(--dsw-alias-interactive-bg-hover); }
+.dsh-mcp-button:disabled { cursor: default; opacity: 0.5; }
+.dsh-mcp-button:focus-visible { outline: var(--dsw-focus-ring-width) solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary)); outline-offset: 2px; }
+/* Track and thumb copied from the host Switch primitive (Switch.module.css) and
+ * renamed under this plugin's prefix. State keys off aria-checked, so the look
+ * cannot disagree with what assistive technology reads. Capsule and thumb opt
+ * out of the global superellipse, exactly as the host's do. */
+.dsh-mcp-switch { box-sizing: border-box; position: relative; flex: 0 0 auto; width: 36px; height: 20px; padding: 2px; border: 0; border-radius: 999px; corner-shape: round; background: var(--dsw-alias-border-l3); cursor: pointer; }
+.dsh-mcp-switch[aria-checked='true'] { background: var(--dsw-alias-brand-primary); }
+.dsh-mcp-switch:disabled { cursor: default; opacity: 0.5; }
+.dsh-mcp-switch:focus-visible { outline: var(--dsw-focus-ring-width) solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary)); outline-offset: 2px; }
+.dsh-mcp-thumb { display: block; width: 16px; height: 16px; border-radius: 50%; corner-shape: round; background: var(--dsw-alias-label-primary-foreground); transition: transform 120ms ease; }
+.dsh-mcp-switch[aria-checked='false'] .dsh-mcp-thumb { background: var(--dsw-alias-switch-thumb); }
+.dsh-mcp-switch[aria-checked='true'] .dsh-mcp-thumb { transform: translateX(16px); }
+.dsh-mcp-error { font-size: 12px; color: var(--dsw-alias-label-primary); border: 1px solid var(--dsw-alias-border-l2); border-radius: 6px; padding: 8px 10px; }
+.dsh-mcp-add { display: flex; flex-direction: column; gap: 8px; border-top: 1px solid var(--dsw-alias-border-l2); padding-top: 12px; }
+.dsh-mcp-input { box-sizing: border-box; width: 100%; min-height: 56px; resize: vertical; font-family: inherit; font-size: 13px; padding: 8px; border-radius: 6px; border: 1px solid var(--dsw-alias-border-l2); background: transparent; color: var(--dsw-alias-label-primary); }
+.dsh-mcp-preview { font-family: ui-monospace, Consolas, monospace; font-size: 12px; white-space: pre-wrap; border: 1px solid var(--dsw-alias-border-l2); border-radius: 6px; padding: 8px; color: var(--dsw-alias-label-secondary); }
 `;
 
     function PanelBody(props) {
@@ -274,9 +288,10 @@ window.__ModuleLoader__.load({
                 h('button', {
                   type: 'button', role: 'switch', 'aria-checked': !s.disabled,
                   'aria-label': t('toggleLabel', { id: s.id }),
-                  className: 'dsh-mcp-switch', 'data-on': !s.disabled, disabled: isBusy,
+                  title: t('toggleLabel', { id: s.id }),
+                  className: 'dsh-mcp-switch', disabled: isBusy,
                   onClick: () => runToggle(s),
-                }))),
+                }, h('span', { className: 'dsh-mcp-thumb' })))),
             h('div', { className: 'dsh-mcp-target' }, commandLine(s)),
             probes[s.id] ? h('div', { className: 'dsh-mcp-result' }, probeText(probes[s.id], t)) : null,
             confirming === s.id
