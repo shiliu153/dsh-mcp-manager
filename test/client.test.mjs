@@ -181,7 +181,14 @@ function hookReact(states) {
   };
   return {
     createElement,
-    useState: () => [states[i++], () => {}],
+    // Fall back to the hook's own initial value once the scripted sequence runs
+    // out, so a new useState in the panel does not have to be appended to every
+    // existing test's array.
+    useState: (initial) => {
+      const scripted = i < states.length ? states[i] : initial;
+      i += 1;
+      return [scripted, () => {}];
+    },
     useRef: () => ({ current: null }),
     useCallback: (fn) => fn,
     useEffect: () => {},
@@ -507,4 +514,211 @@ test('the open editor shows the row subtree and its placeholder hints', () => {
   const area = findByClass(node, 'dsh-mcp-input');
   assert.equal(area.props.value, 'serverName: alpha', 'the editor is seeded with the host subtree');
   assert.match(textOf(node).join(' | '), /jsPlaceholders/);
+});
+
+// ---- market view -------------------------------------------------------------
+
+const MARKET_ROW = {
+  registryName: 'ai.x/one', title: 'One', publisher: 'ai.x', version: '1.0.0',
+  serverName: 'one', transport: 'stdio', commandLine: 'npx -y one@1.0.0',
+  gaps: [], installed: false, drift: null, runtimePresent: true, status: 'active',
+  repositoryUrl: '', websiteUrl: '',
+};
+
+/** PanelBody state in call order, through `tab`; the rest fall back to initial. */
+const marketStates = (over = {}) => [
+  { status: 'ready', data: { patch: '/p', mtimeMs: 1, resourcesAvailable: true, servers: [] } },
+  {}, {}, '', '', null, '', '', '', null,
+  'market',
+  { status: 'ready', results: [], degraded: '', nextCursor: '' },
+  '', '', false, null,
+  ...(over.extra ?? []),
+];
+
+test('marketCommandLine shows the exact thing that would run', () => {
+  const { __test } = loadModule().factory(requireStub);
+  assert.equal(
+    __test.marketCommandLine({ execution: { kind: 'stdio', command: 'npx', args: ['-y', 'pkg@1.0.0'] } }),
+    'npx -y pkg@1.0.0',
+  );
+  assert.equal(
+    __test.marketCommandLine({ execution: { kind: 'streamable-http', url: 'https://api.test/mcp' } }),
+    'https://api.test/mcp',
+  );
+  assert.equal(__test.marketCommandLine({}), '');
+});
+
+test('the execution checkbox is demanded for local execution only', () => {
+  const { __test } = loadModule().factory(requireStub);
+  // The host's market rows carry `transport`; a raw candidate carries `execution`.
+  assert.equal(__test.needsExecutionCheckbox({ transport: 'stdio' }), true);
+  assert.equal(__test.needsExecutionCheckbox({ transport: 'streamable-http' }), false);
+  assert.equal(__test.needsExecutionCheckbox({ execution: { kind: 'stdio', command: 'npx' } }), true);
+  assert.equal(__test.needsExecutionCheckbox({ execution: { kind: 'streamable-http', url: 'https://x/mcp' } }), false);
+  assert.equal(__test.needsExecutionCheckbox({}), false);
+  assert.equal(__test.needsExecutionCheckbox(undefined), false);
+});
+
+test('gapText names every credential still to be filled', () => {
+  const { __test } = loadModule().factory(requireStub);
+  assert.equal(__test.gapText([]), '');
+  assert.equal(__test.gapText(undefined), '');
+  assert.equal(
+    __test.gapText([{ kind: 'secret', name: 'API_KEY' }, { kind: 'variable', name: 'TENANT' }]),
+    'secret: API_KEY; variable: TENANT',
+  );
+});
+
+test('driftText maps every state to a dictionary key', () => {
+  const { __test } = loadModule().factory(requireStub);
+  assert.match(__test.driftText({ state: 'behind', installed: '1.0.0', latest: '1.1.0' }), /behind:1\.0\.0->1\.1\.0/);
+  assert.equal(__test.driftText({ state: 'current', installed: '1.0.0', latest: '1.0.0' }), 'current');
+  assert.equal(__test.driftText({ state: 'ahead' }), 'ahead');
+  assert.equal(__test.driftText({ state: 'unpinned' }), 'unpinned');
+  assert.match(__test.driftText({ state: 'incomparable', installed: 'x', latest: 'y' }), /incomparable/);
+  assert.equal(__test.driftText(null), '');
+});
+
+test('driftLabel resolves each state through the dictionary', () => {
+  const { __test } = loadModule().factory(requireStub);
+  const t = (key, vars) => `${key}:${JSON.stringify(vars ?? {})}`;
+  assert.match(__test.driftLabel({ state: 'behind', installed: '1.0.0', latest: '1.1.0' }, t), /^marketDriftBehind:/);
+  assert.match(__test.driftLabel({ state: 'unpinned' }, t), /^marketDriftUnpinned:/);
+  assert.match(__test.driftLabel({ state: 'nonsense' }, t), /^marketDriftIncomparable:/, 'unknown states fall back');
+  assert.equal(__test.driftLabel(null, t), '');
+});
+
+test('the panel offers both tabs, and says the registry searches names only', () => {
+  const node = renderPanelNode(hookReact(marketStates()), OURS, primitivesStub([]));
+  const text = textOf(node).join(' | ');
+  assert.match(text, /installedTab/);
+  assert.match(text, /marketTab/);
+  assert.match(text, /marketSearchByName/);
+  assert.equal(findByClass(node, 'dsh-mcp-tabs').props.role, 'tablist');
+});
+
+test('the installed tab is what renders before you switch', () => {
+  const states = marketStates();
+  states[10] = 'installed';
+  const node = renderPanelNode(hookReact(states), OURS, primitivesStub([]));
+  const text = textOf(node).join(' | ');
+  assert.ok(!text.includes('marketSearchByName'), 'the market search box is not rendered on the installed tab');
+  assert.match(text, /addTitle/, 'the add box still renders on the installed tab');
+});
+
+test('a market result renders its provenance and its command line', () => {
+  const states = marketStates();
+  states[11] = { status: 'ready', results: [MARKET_ROW], degraded: '', nextCursor: '' };
+  const node = renderPanelNode(hookReact(states), OURS, primitivesStub([]));
+  const text = textOf(node).join(' | ');
+  assert.match(text, /npx -y one@1\.0\.0/);
+  assert.match(text, /ai\.x/);
+});
+
+test('an unreachable registry is reported without taking the panel down', () => {
+  const states = marketStates();
+  states[11] = { status: 'ready', results: [], degraded: 'HTTP 503', nextCursor: '' };
+  const node = renderPanelNode(hookReact(states), OURS, primitivesStub([]));
+  // The stub `t` returns the key, so the reason itself is asserted through the
+  // dictionary call in the driftLabel test rather than here.
+  assert.match(textOf(node).join(' | '), /marketDegraded/);
+  assert.equal(findByClass(node, 'dsh-mcp-warn').children[0], 'marketDegraded');
+});
+
+test('opening a result reveals provenance, the execution surface and the tick box', () => {
+  const states = marketStates();
+  states[11] = { status: 'ready', results: [MARKET_ROW], degraded: '', nextCursor: '' };
+  states[13] = 'ai.x/one';
+  const node = renderPanelNode(hookReact(states), OURS, primitivesStub([]));
+  const text = textOf(node).join(' | ');
+  assert.match(text, /marketProvenance/);
+  assert.match(text, /marketExecution/);
+  assert.match(text, /marketConfirm/, 'stdio execution demands an explicit tick');
+  assert.equal(findByClass(node, 'dsh-mcp-exec').children[0], 'npx -y one@1.0.0');
+});
+
+test('a remote result gets no tick box, and says no credentials are needed', () => {
+  const states = marketStates();
+  states[11] = {
+    status: 'ready', degraded: '', nextCursor: '',
+    results: [{ ...MARKET_ROW, transport: 'streamable-http', commandLine: 'https://api.test/mcp' }],
+  };
+  states[13] = 'ai.x/one';
+  const node = renderPanelNode(hookReact(states), OURS, primitivesStub([]));
+  const text = textOf(node).join(' | ');
+  assert.ok(!text.includes('marketConfirm'), 'a remote server only sends queries to a third party');
+  assert.match(text, /marketNoGaps/);
+});
+
+/** First button whose rendered text contains `needle`. */
+function findButtonByText(node, needle) {
+  if (!node || typeof node !== 'object') return undefined;
+  if (Array.isArray(node)) {
+    for (const c of node) { const hit = findButtonByText(c, needle); if (hit) return hit; }
+    return undefined;
+  }
+  if (node.type === 'button' && textOf(node).join(' ').includes(needle)) return node;
+  return findButtonByText(node.children, needle);
+}
+
+test('the install control is disabled until the tick box is ticked', () => {
+  const states = marketStates();
+  states[11] = { status: 'ready', results: [MARKET_ROW], degraded: '', nextCursor: '' };
+  states[13] = 'ai.x/one';
+  states[14] = false;
+
+  const unticked = findButtonByText(renderPanelNode(hookReact(states), OURS, primitivesStub([])), 'marketInstall');
+  assert.ok(unticked, 'the install button must be rendered');
+  assert.equal(unticked.props.disabled, true, 'an unticked stdio install must not be clickable');
+
+  states[14] = true;
+  const ticked = findButtonByText(renderPanelNode(hookReact(states), OURS, primitivesStub([])), 'marketInstall');
+  assert.equal(ticked.props.disabled, false);
+});
+
+test('a result that needs credentials lists them and points at the credential flow', () => {
+  const states = marketStates();
+  states[11] = {
+    status: 'ready', degraded: '', nextCursor: '',
+    results: [{ ...MARKET_ROW, gaps: [{ kind: 'secret', name: 'Authorization', description: 'your token' }] }],
+  };
+  states[13] = 'ai.x/one';
+  const node = renderPanelNode(hookReact(states), OURS, primitivesStub([]));
+  const text = textOf(node).join(' | ');
+  assert.match(text, /secret: Authorization/);
+  assert.match(text, /marketGapsHint/);
+});
+
+test('a deprecated result is labelled as such', () => {
+  const states = marketStates();
+  states[11] = { status: 'ready', degraded: '', nextCursor: '', results: [{ ...MARKET_ROW, status: 'deprecated' }] };
+  const node = renderPanelNode(hookReact(states), OURS, primitivesStub([]));
+  assert.match(textOf(node).join(' | '), /marketDeprecated/);
+});
+
+test('an installed result is marked, and its drift is shown', () => {
+  const states = marketStates();
+  states[11] = {
+    status: 'ready', degraded: '', nextCursor: '',
+    results: [{ ...MARKET_ROW, installed: true, installedId: 'mcp-one', drift: { state: 'behind', installed: '0.9.0', latest: '1.0.0' } }],
+  };
+  const node = renderPanelNode(hookReact(states), OURS, primitivesStub([]));
+  const text = textOf(node).join(' | ');
+  assert.match(text, /marketInstalled/);
+  assert.match(text, /marketDriftBehind/);
+});
+
+test('a runtime missing from PATH is called out', () => {
+  const states = marketStates();
+  states[11] = { status: 'ready', degraded: '', nextCursor: '', results: [{ ...MARKET_ROW, runtimePresent: false }] };
+  states[13] = 'ai.x/one';
+  const node = renderPanelNode(hookReact(states), OURS, primitivesStub([]));
+  assert.match(textOf(node).join(' | '), /marketRuntimeMissing/);
+});
+
+test('a next cursor offers a load-more control', () => {
+  const states = marketStates();
+  states[11] = { status: 'ready', results: [MARKET_ROW], degraded: '', nextCursor: 'c2' };
+  const node = renderPanelNode(hookReact(states), OURS, primitivesStub([]));
+  assert.match(textOf(node).join(' | '), /marketMore/);
 });

@@ -61,6 +61,36 @@ window.__ModuleLoader__.load({
       write: '写入',
       needsInput: '还缺信息：{items}',
       empty: '没有已登记的 MCP 服务器',
+      installedTab: '已安装',
+      marketTab: '市场',
+      marketSearch: '搜索',
+      marketSearchPlaceholder: '按名称搜索 MCP Registry',
+      marketSearchByName: 'Registry 的搜索只匹配名称（反域名，如 ai.ankimcp/anki-mcp-server），不匹配描述。',
+      marketEmpty: '没有匹配的可安装条目',
+      marketDegraded: '离线，无法访问 registry：{reason}',
+      marketMore: '加载更多',
+      marketDetail: '详情',
+      marketClose: '收起',
+      marketProvenance: '出处',
+      marketPublisher: '发布者',
+      marketVersion: '版本',
+      marketRepo: '仓库',
+      marketSite: '主页',
+      marketDeprecated: '已弃用',
+      marketExecution: '将要执行 / 连接',
+      marketRuntimeMissing: '运行时不在 PATH 上，装好后需要先安装它',
+      marketGaps: '还缺凭据',
+      marketGapsHint: '装完后用 dsh-mcp credential <id> set <值>，或让 agent 调用 mcp_manager_credential 补上。',
+      marketNoGaps: '无需凭据',
+      marketInstall: '安装',
+      marketInstallAnyway: '仍然安装',
+      marketConfirm: '我已确认上述执行目标与出处',
+      marketInstalled: '已安装',
+      marketDriftBehind: '有更新：{installed} → {latest}',
+      marketDriftCurrent: '已是最新',
+      marketDriftAhead: '已装版本比 registry 更新',
+      marketDriftUnpinned: '版本未钉住，无法比对',
+      marketDriftIncomparable: '与已装版本不同（无法比较）',
     };
     const EN = {
       title: 'MCP servers',
@@ -96,6 +126,36 @@ window.__ModuleLoader__.load({
       write: 'Write',
       needsInput: 'Still needed: {items}',
       empty: 'No MCP servers registered',
+      installedTab: 'Installed',
+      marketTab: 'Market',
+      marketSearch: 'Search',
+      marketSearchPlaceholder: 'Search the MCP Registry by name',
+      marketSearchByName: 'The registry matches names only (reverse-DNS, e.g. ai.ankimcp/anki-mcp-server) — not descriptions.',
+      marketEmpty: 'No installable entries matched',
+      marketDegraded: 'Offline — cannot reach the registry: {reason}',
+      marketMore: 'Load more',
+      marketDetail: 'Details',
+      marketClose: 'Close',
+      marketProvenance: 'Provenance',
+      marketPublisher: 'Publisher',
+      marketVersion: 'Version',
+      marketRepo: 'Repository',
+      marketSite: 'Website',
+      marketDeprecated: 'Deprecated',
+      marketExecution: 'Will run / connect to',
+      marketRuntimeMissing: 'The runtime is not on PATH; install it before this server can start',
+      marketGaps: 'Credentials still needed',
+      marketGapsHint: 'After the write, run dsh-mcp credential <id> set <value>, or have the agent call mcp_manager_credential.',
+      marketNoGaps: 'No credentials needed',
+      marketInstall: 'Install',
+      marketInstallAnyway: 'Install anyway',
+      marketConfirm: 'I have read the execution target and provenance above',
+      marketInstalled: 'Installed',
+      marketDriftBehind: 'Update available: {installed} → {latest}',
+      marketDriftCurrent: 'Up to date',
+      marketDriftAhead: 'Installed version is newer than the registry',
+      marketDriftUnpinned: 'Installed without a pinned version, so it cannot be compared',
+      marketDriftIncomparable: 'Differs from the installed version (not comparable)',
     };
 
     // ---- pure helpers (unit-tested through __test) ----
@@ -170,6 +230,63 @@ window.__ModuleLoader__.load({
     function openEditor(server) {
       if (!server?.editable) return { id: '', text: '', editable: false, reason: server?.editReason ?? '' };
       return { id: server.id, text: server.configText ?? '', editable: true, reason: '' };
+    }
+
+    /** The exact command line or URL a market entry would run. */
+    function marketCommandLine(candidate) {
+      const exec = candidate?.execution;
+      if (!exec) return '';
+      if (exec.kind === 'stdio') return [exec.command, ...(exec.args ?? [])].filter(Boolean).join(' ');
+      return exec.url ?? '';
+    }
+
+    /**
+     * Only local execution demands an explicit tick.
+     *
+     * `npx -y <anything>` runs arbitrary code on this machine; a remote URL only
+     * sends queries to a third party, the same as any web API. Demanding a tick
+     * for both trains people to click through it, which weakens the one that
+     * matters. Credential gaps and a missing runtime are shown as warnings
+     * instead — they ask the user to do something, not to agree to something.
+     *
+     * Reads `transport` because that is what the host's market rows carry;
+     * `execution.kind` is accepted too so the helper stays usable against a raw
+     * candidate.
+     */
+    function needsExecutionCheckbox(candidate) {
+      return (candidate?.execution?.kind ?? candidate?.transport) === 'stdio';
+    }
+
+    function gapText(gaps) {
+      return (gaps ?? []).map((g) => `${g.kind}: ${g.name}`).join('; ');
+    }
+
+    // Returns a dictionary KEY, not prose: the component maps it through t().
+    function driftText(drift) {
+      if (!drift) return '';
+      switch (drift.state) {
+        case 'behind': return `behind:${drift.installed}->${drift.latest}`;
+        case 'current': return 'current';
+        case 'ahead': return 'ahead';
+        case 'unpinned': return 'unpinned';
+        default: return `incomparable:${drift.installed}->${drift.latest}`;
+      }
+    }
+
+    const DRIFT_KEYS = {
+      behind: 'marketDriftBehind',
+      current: 'marketDriftCurrent',
+      ahead: 'marketDriftAhead',
+      unpinned: 'marketDriftUnpinned',
+      incomparable: 'marketDriftIncomparable',
+    };
+
+    function driftLabel(drift, t) {
+      if (!drift) return '';
+      return t(DRIFT_KEYS[drift.state] ?? DRIFT_KEYS.incomparable, {
+        installed: String(drift.installed ?? ''),
+        latest: String(drift.latest ?? ''),
+      });
     }
 
     // ---- components ----
@@ -255,6 +372,16 @@ window.__ModuleLoader__.load({
 .dsh-mcp-add { display: flex; flex-direction: column; gap: 8px; border-top: 1px solid var(--dsw-alias-border-l2); padding-top: 12px; }
 .dsh-mcp-input { box-sizing: border-box; width: 100%; min-height: 56px; resize: vertical; font-family: inherit; font-size: 13px; padding: 8px; border-radius: 6px; border: 1px solid var(--dsw-alias-border-l2); background: transparent; color: var(--dsw-alias-label-primary); }
 .dsh-mcp-preview { font-family: ui-monospace, Consolas, monospace; font-size: 12px; white-space: pre-wrap; border: 1px solid var(--dsw-alias-border-l2); border-radius: 6px; padding: 8px; color: var(--dsw-alias-label-secondary); }
+.dsh-mcp-tabs { display: flex; gap: 4px; }
+.dsh-mcp-tab { font-size: 12px; padding: 4px 10px; border-radius: 6px; border: 1px solid transparent; background: transparent; color: var(--dsw-alias-label-secondary); cursor: pointer; }
+.dsh-mcp-tab[aria-selected='true'] { border-color: var(--dsw-alias-border-l2); color: var(--dsw-alias-label-primary); }
+.dsh-mcp-tab:focus-visible { outline: var(--dsw-focus-ring-width) solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary)); outline-offset: 2px; }
+.dsh-mcp-note { font-size: 12px; color: var(--dsw-alias-label-caption); }
+.dsh-mcp-warn { font-size: 12px; color: var(--dsw-alias-state-warn-primary); }
+.dsh-mcp-detail { border: 1px solid var(--dsw-alias-border-l2); border-radius: 6px; padding: 8px 10px; display: flex; flex-direction: column; gap: 6px; }
+.dsh-mcp-exec { font-family: ui-monospace, Consolas, monospace; font-size: 12px; color: var(--dsw-alias-label-primary); border: 1px solid var(--dsw-alias-border-l2); border-radius: 6px; padding: 6px 8px; word-break: break-all; }
+.dsh-mcp-check { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--dsw-alias-label-secondary); }
+.dsh-mcp-link { font-size: 12px; color: var(--dsw-alias-label-secondary); word-break: break-all; }
 `;
 
     function PanelBody(props) {
@@ -271,6 +398,13 @@ window.__ModuleLoader__.load({
       const [editing, setEditing] = React.useState('');
       const [editText, setEditText] = React.useState('');
       const [editState, setEditState] = React.useState(null);
+      // Market state, in the order the render smoke tests script it.
+      const [tab, setTab] = React.useState('installed');
+      const [market, setMarket] = React.useState({ status: 'idle', results: [], degraded: '', nextCursor: '' });
+      const [marketQuery, setMarketQuery] = React.useState('');
+      const [marketOpen, setMarketOpen] = React.useState('');
+      const [marketChecked, setMarketChecked] = React.useState(false);
+      const [installState, setInstallState] = React.useState(null);
       const abortRef = React.useRef(null);
 
       const setBusyKey = (key, value) => setBusy((b) => {
@@ -434,6 +568,118 @@ window.__ModuleLoader__.load({
         }
       }
 
+      async function runMarketSearch(cursor) {
+        setInstallState(null);
+        setMarketChecked(false);
+        setMarket((m) => ({ ...m, status: 'loading' }));
+        try {
+          const qs = new URLSearchParams({ q: marketQuery });
+          if (cursor) qs.set('cursor', cursor);
+          const r = await fetch(`${API}/market?${qs.toString()}`);
+          const body = await r.json().catch(() => null);
+          if (!r.ok) throw new Error(errorMessage(body, `HTTP ${r.status}`));
+          setMarket((m) => ({
+            status: 'ready',
+            results: cursor ? [...m.results, ...(body.results ?? [])] : (body.results ?? []),
+            degraded: body.degraded ?? '',
+            nextCursor: body.nextCursor ?? '',
+          }));
+        } catch (e) {
+          setMarket({ status: 'error', results: [], degraded: String(e?.message || e), nextCursor: '' });
+        }
+      }
+
+      function openMarket(registryName) {
+        setMarketOpen(marketOpen === registryName ? '' : registryName);
+        setMarketChecked(false);
+        setInstallState(null);
+      }
+
+      async function runMarketInstall(candidate) {
+        setBusyKey('__market', 'write');
+        setInstallState(null);
+        try {
+          const payload = await post('/market/install', { name: candidate.registryName, confirm: true });
+          setInstallState({ preview: payload.preview, probe: payload.probe });
+          await load();
+          if (payload.probe) setProbes((p) => ({ ...p, __last: payload.probe }));
+        } catch (e) {
+          setInstallState({ error: String(e?.message || e) });
+        } finally {
+          setBusyKey('__market', '');
+        }
+      }
+
+      function marketRows() {
+        const out = [];
+        if (market.degraded) {
+          out.push(h('div', { key: 'd', className: 'dsh-mcp-warn' }, t('marketDegraded', { reason: market.degraded })));
+        }
+        if (market.status === 'ready' && (market.results ?? []).length === 0 && !market.degraded) {
+          out.push(h('div', { key: 'e', className: 'dsh-mcp-meta' }, t('marketEmpty')));
+        }
+        for (const c of market.results ?? []) {
+          const open = marketOpen === c.registryName;
+          const busyKey = Boolean(busy.__market);
+          out.push(h('div', { key: c.registryName, className: 'dsh-mcp-row' },
+            h('div', { className: 'dsh-mcp-row-head' },
+              h('span', { className: 'dsh-mcp-id' }, c.title || c.registryName),
+              h('span', { className: 'dsh-mcp-meta' }, c.publisher),
+              h('span', { className: 'dsh-mcp-meta' }, c.version),
+              h('span', { className: 'dsh-mcp-meta' }, c.transport),
+              c.status === 'deprecated' ? h('span', { className: 'dsh-mcp-warn' }, t('marketDeprecated')) : null,
+              c.installed ? h('span', { className: 'dsh-mcp-meta' }, t('marketInstalled')) : null,
+              h('span', { className: 'dsh-mcp-actions' },
+                h('button', {
+                  type: 'button', className: 'dsh-mcp-button', 'aria-expanded': open,
+                  onClick: () => openMarket(c.registryName),
+                }, open ? t('marketClose') : t('marketDetail')))),
+            h('div', { className: 'dsh-mcp-meta' }, c.description),
+            h('div', { className: 'dsh-mcp-target' }, c.commandLine),
+            c.drift ? h('div', { className: 'dsh-mcp-meta' }, driftLabel(c.drift, t)) : null,
+            open
+              ? h('div', { className: 'dsh-mcp-detail' },
+                  h('div', { className: 'dsh-mcp-meta' }, `${t('marketProvenance')}: ${c.registryName}`),
+                  h('div', { className: 'dsh-mcp-meta' }, `${t('marketPublisher')}: ${c.publisher} · ${t('marketVersion')}: ${c.version}`),
+                  c.repositoryUrl
+                    ? h('a', { className: 'dsh-mcp-link', href: c.repositoryUrl, target: '_blank', rel: 'noreferrer noopener' }, `${t('marketRepo')}: ${c.repositoryUrl}`)
+                    : null,
+                  c.websiteUrl
+                    ? h('a', { className: 'dsh-mcp-link', href: c.websiteUrl, target: '_blank', rel: 'noreferrer noopener' }, `${t('marketSite')}: ${c.websiteUrl}`)
+                    : null,
+                  h('div', { className: 'dsh-mcp-meta' }, t('marketExecution')),
+                  h('div', { className: 'dsh-mcp-exec' }, c.commandLine),
+                  c.runtimePresent === false ? h('div', { className: 'dsh-mcp-warn' }, t('marketRuntimeMissing')) : null,
+                  h('div', { className: 'dsh-mcp-meta' }, `${t('marketGaps')}: ${(c.gaps ?? []).length ? gapText(c.gaps) : t('marketNoGaps')}`),
+                  (c.gaps ?? []).length ? h('div', { className: 'dsh-mcp-note' }, t('marketGapsHint')) : null,
+                  needsExecutionCheckbox(c)
+                    ? h('label', { className: 'dsh-mcp-check' },
+                        h('input', {
+                          type: 'checkbox', checked: marketChecked,
+                          onChange: (e) => setMarketChecked(e.target.checked),
+                        }),
+                        t('marketConfirm'))
+                    : null,
+                  h('div', { className: 'dsh-mcp-actions' },
+                    h('button', {
+                      type: 'button', className: 'dsh-mcp-button',
+                      disabled: busyKey || (needsExecutionCheckbox(c) && !marketChecked),
+                      onClick: () => runMarketInstall(c),
+                    }, c.runtimePresent === false ? t('marketInstallAnyway') : t('marketInstall'))),
+                  installState?.error ? h('div', { className: 'dsh-mcp-error' }, installState.error) : null,
+                  installState?.preview ? h('div', { className: 'dsh-mcp-preview' }, installState.preview) : null,
+                  installState?.probe ? h('div', { className: 'dsh-mcp-result' }, probeText(installState.probe, t)) : null)
+              : null));
+        }
+        if (market.nextCursor) {
+          out.push(h('button', {
+            key: 'more', type: 'button', className: 'dsh-mcp-button', disabled: Boolean(busy.__market),
+            onClick: () => runMarketSearch(market.nextCursor),
+          }, t('marketMore')));
+        }
+        return out;
+      }
+
       const rows = [];
       if (state.status === 'loading') rows.push(h('div', { key: 'l', className: 'dsh-mcp-meta' }, t('loading')));
       if (state.status === 'error') {
@@ -526,11 +772,34 @@ window.__ModuleLoader__.load({
               : null,
             h('button', { type: 'button', className: 'dsh-mcp-button', disabled: state.status === 'loading',
               onClick: load }, t('refresh')))),
-        state.status === 'ready' && state.data?.patch
+        state.status === 'ready' && state.data?.patch && tab === 'installed'
           ? h('div', { className: 'dsh-mcp-path' }, `${t('patch')}: ${state.data.patch}`)
           : null,
-        h('div', { className: 'dsh-mcp-list' }, rows),
-        h('div', { className: 'dsh-mcp-add' },
+        h('div', { className: 'dsh-mcp-tabs', role: 'tablist' },
+          h('button', {
+            type: 'button', role: 'tab', className: 'dsh-mcp-tab', 'aria-selected': tab === 'installed',
+            onClick: () => setTab('installed'),
+          }, t('installedTab')),
+          h('button', {
+            type: 'button', role: 'tab', className: 'dsh-mcp-tab', 'aria-selected': tab === 'market',
+            onClick: () => setTab('market'),
+          }, t('marketTab'))),
+        tab === 'market'
+          ? h('div', { className: 'dsh-mcp-add' },
+              h('textarea', {
+                className: 'dsh-mcp-input', value: marketQuery, placeholder: t('marketSearchPlaceholder'),
+                onChange: (e) => setMarketQuery(e.target.value),
+              }),
+              h('div', { className: 'dsh-mcp-note' }, t('marketSearchByName')),
+              h('div', { className: 'dsh-mcp-actions' },
+                h('button', {
+                  type: 'button', className: 'dsh-mcp-button',
+                  disabled: market.status === 'loading' || !marketQuery.trim(),
+                  onClick: () => runMarketSearch(),
+                }, market.status === 'loading' ? t('loading') : t('marketSearch'))))
+          : null,
+        h('div', { className: 'dsh-mcp-list' }, tab === 'market' ? marketRows() : rows),
+        tab === 'installed' ? h('div', { className: 'dsh-mcp-add' },
           h('span', { className: 'dsh-mcp-title' }, t('addTitle')),
           h('textarea', {
             className: 'dsh-mcp-input', value: addText, placeholder: t('addPlaceholder'),
@@ -555,7 +824,7 @@ window.__ModuleLoader__.load({
                     onClick: runWrite }, busy.__add === 'write' ? t('loading') : t('write')),
                   h('button', { type: 'button', className: 'dsh-mcp-button',
                     onClick: () => setPreview(null) }, t('cancel'))))
-            : null));
+            : null) : null);
     }
 
     return {
@@ -571,7 +840,7 @@ window.__ModuleLoader__.load({
           inject: () => ({ t }),
         }, Panel));
       },
-      __test: { NS, BUNDLE_NAME, API, isOurs, badgeState, badgeKey, dotProps, commandLine, probeText, errorMessage, hasRawJsExpr, openEditor, ZH, EN },
+      __test: { NS, BUNDLE_NAME, API, isOurs, badgeState, badgeKey, dotProps, commandLine, probeText, errorMessage, hasRawJsExpr, openEditor, marketCommandLine, needsExecutionCheckbox, gapText, driftText, driftLabel, ZH, EN },
     };
   },
 });
