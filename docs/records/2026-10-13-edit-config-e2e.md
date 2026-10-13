@@ -70,18 +70,20 @@ dsh-mcp-manager **v0.4.1**(本仓库,master;v0.4.0 为编辑功能,v0.4.1 为下
 
 **验证**:`node cli/mcp.js probe --id mcp-github --file ~/.dsh/cordis.patch.yml` → `OK mcp-github (streamable-http): 49 tools`;新增 8 条测试(标记识别、求值作用域、headers/env/数组解析且不改动入参、失败路径回报、无可求值项时原样透传、http 端到端带鉴权 fixture 的成功/失败/字面量三种情形);全量 **167/167**。
 
-## 4. 待验证(需要重启 DSH)
+## 4. 重启后的实测
 
-`node_modules` 不在 DSH 的 HMR 监听范围,当前运行的 harness 进程启动于 **15:15:11**,早于本次改动,所以内存里仍是旧代码:
+`node_modules` 不在 DSH 的 HMR 监听范围,所以本节各项都必须重启 DSH 才能生效。改动落地时运行的进程启动于 15:15:11,早于改动。
 
-- [ ] 重启后面板出现「编辑」按钮(旧 host 的 `GET /servers` 不带 `configText`,新面板会把它渲染为禁用,属预期);
-- [ ] 面板改 `mcp-chrome-devtools` 的 `toolCallTimeoutMs` → 写入 → 探测报工具数;
-- [ ] `mcp-github` 的 `Authorization` 在面板里显示为 `!!js «0»`,写入后该行逐字节不变;
-- [ ] 新会话里工具数 7 → **8**,`mcp_manager_update` 干跑与 `confirm:true` 实测;
-- [ ] 409 冲突路径(面板编辑期间从外部改 patch);
-- [ ] **面板上点 `mcp-github` 的「探测」应报 49 tools**(v0.4.1 的 `lib/probe.js` 修复;在重启前,面板按钮仍是旧代码,会继续报 400——CLI 已经是好的)。
+用户重启后回报「编辑功能正常」,随后在 v0.4.1(探测修复)上回报「测试通过」:
 
-> 探测路由的存在性无法用 HTTP 状态码判断:`/api` 通道的会话鉴权**先于**路由匹配,不存在的路径同样返回 401(实测 `/api/dsh-mcp-manager/definitely-not-a-route` 也是 401)。重启后请在面板上实测。
+- [x] 面板出现「编辑」按钮并可写入(用户实测,2026-10-13 16:0x);
+- [x] 面板探测 `mcp-github` 正常(用户实测,2026-10-13 16:10);
+- [ ] 面板改 `mcp-chrome-devtools` 的 `toolCallTimeoutMs` → 写入 → 探测报工具数(未单独确认);
+- [ ] `mcp-github` 的 `Authorization` 在面板里显示为 `!!js «0»`,写入后该行逐字节不变(未单独确认;§2 已在真实副本上逐字节验证过同一路径);
+- [ ] 新会话里工具数 7 → **8**,`mcp_manager_update` 干跑与 `confirm:true` 实测(未单独确认);
+- [ ] 409 冲突路径(面板编辑期间从外部改 patch;未单独确认)。
+
+> 探测路由的存在性无法用 HTTP 状态码判断:`/api` 通道的会话鉴权**先于**路由匹配,不存在的路径同样返回 401(实测 `/api/dsh-mcp-manager/definitely-not-a-route` 也是 401),所以只能像上面这样在面板上实测。
 
 ## 5. 生效条件与安装态
 
