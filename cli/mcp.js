@@ -10,7 +10,8 @@
 import path from 'node:path';
 import process from 'node:process';
 import { parseTopBlocks, findRow } from '../lib/surgery.js';
-import { validateEntry, SECRET_KEY_RE, SERVER_NAME_RE } from '../lib/rules.js';
+import { validateEntry, SERVER_NAME_RE } from '../lib/rules.js';
+import { isMcpClientRow, maskEntry } from '../lib/rows.js';
 import { loadPatchStructured } from '../lib/dump.js';
 import { probeConfig } from '../lib/probe.js';
 import { defaultPatchPath, renderEntryRow, applySurgery, applySurgeryAsync } from '../lib/patchfile.js';
@@ -67,23 +68,9 @@ async function readEntries() {
 function nameOf(text, line) { return /^ *name:\s*(.+)$/m.exec(text.split('\n').slice(line, line + 12).join('\n'))?.[1]?.replace(/^['"]|['"],?$/g, '') ?? ''; }
 function disabledOf(text, a, b) { return /disabled:\s*true/.test(text.split('\n').slice(a, b + 1).join('\n')); }
 
-function maskEntry(e) {
-  const clone = JSON.parse(JSON.stringify(e));
-  for (const dict of ['env', 'headers']) {
-    const d = clone.config?.[dict];
-    if (d && typeof d === 'object') {
-      for (const [k, v] of Object.entries(d)) {
-        if (SECRET_KEY_RE.test(k)) d[k] = 'B*****';
-        else if (typeof v === 'object' && v?.__jsExpr) d[k] = 'B*****';   // !!js expression result
-      }
-    }
-  }
-  return clone;
-}
-
 switch (cmd) {
   case 'list': {
-    const entries = (await readEntries()).filter(e => !e.name || e.name.includes('dsh-mcp-client') || e.config?.transport);
+    const entries = (await readEntries()).filter(isMcpClientRow);
     const masked = entries.map(maskEntry);
     if (flags.json) { console.log(JSON.stringify({ file: FILE, entries: masked }, null, 2)); break; }
     console.log(`patch: ${FILE}`);
