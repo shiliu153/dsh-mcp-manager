@@ -114,3 +114,96 @@ test('errorMessage prefers the server payload over the fallback', () => {
   assert.equal(__test.errorMessage(null, 'fallback'), 'fallback');
   assert.equal(__test.errorMessage({}, 'fallback'), 'fallback');
 });
+
+// ---- render smoke test -------------------------------------------------------
+// A tiny React stand-in: createElement invokes function components (so the
+// panel's own tree is walked for real), and useState hands back a scripted
+// sequence of state values in call order.
+
+function hookReact(states) {
+  let i = 0;
+  const createElement = (type, props, ...children) => {
+    if (typeof type === 'function') return type({ ...(props ?? {}), children });
+    return { type, props, children };
+  };
+  return {
+    createElement,
+    useState: () => [states[i++], () => {}],
+    useRef: () => ({ current: null }),
+    useCallback: (fn) => fn,
+    useEffect: () => {},
+  };
+}
+
+function textOf(node, out = []) {
+  if (node === null || node === undefined || typeof node === 'boolean') return out;
+  if (typeof node === 'string' || typeof node === 'number') { out.push(String(node)); return out; }
+  if (Array.isArray(node)) { for (const n of node) textOf(n, out); return out; }
+  if (node.children) textOf(node.children, out);
+  return out;
+}
+
+function renderPanel(react, subject) {
+  const api = loadModule().factory((id) => (id === 'react' ? react : requireStub(id)));
+  const registered = [];
+  api.apply({
+    effect: (fn) => { fn(); },
+    locale: { register: () => {}, bind: () => (key) => key },
+    slots: { inject: (n, cb) => registered.push(cb()), register: (d, c) => ({ descriptor: d, component: c }) },
+  });
+  return textOf(registered[0].component({ t: (key) => key, subject })).join(' | ');
+}
+
+const OURS = { kind: 'bundle', pkg: { name: '@dsh-contrib/dsh-mcp-manager' } };
+
+test('the ready path renders rows, targets and badges', () => {
+  const react = hookReact([
+    { status: 'ready', data: { patch: '/tmp/p.yml', resourcesAvailable: true, servers: [
+      { id: 'mcp-a', serverName: 'alpha', transport: 'stdio', command: 'npx', args: ['-y', 'x'], url: '', disabled: false, live: true },
+      { id: 'mcp-b', serverName: 'beta', transport: 'stdio', command: 'node', args: [], url: '', disabled: true, live: false },
+    ] } },
+    {}, {}, '', '', null, '',
+  ]);
+  const text = renderPanel(react, OURS);
+  assert.match(text, /mcp-a/);
+  assert.match(text, /npx -y x/);
+  assert.match(text, /badgeConnected/);
+  assert.match(text, /mcp-b/);
+  assert.match(text, /badgeDisabled/);
+  assert.match(text, /\/tmp\/p\.yml/);
+});
+
+test('an enabled but unregistered server renders the blind-spot badge', () => {
+  const react = hookReact([
+    { status: 'ready', data: { patch: '/p', resourcesAvailable: true, servers: [
+      { id: 'mcp-c', serverName: 'gamma', transport: 'stdio', command: 'node', args: [], url: '', disabled: false, live: false },
+    ] } },
+    {}, {}, '', '', null, '',
+  ]);
+  assert.match(renderPanel(react, OURS), /badgeEnabledOffline/);
+});
+
+test('a missing resource service renders the unavailable badge', () => {
+  const react = hookReact([
+    { status: 'ready', data: { patch: '/p', resourcesAvailable: false, servers: [
+      { id: 'mcp-d', serverName: 'delta', transport: 'stdio', command: 'node', args: [], url: '', disabled: false, live: false },
+    ] } },
+    {}, {}, '', '', null, '',
+  ]);
+  assert.match(renderPanel(react, OURS), /badgeUnknown/);
+});
+
+test('the error path renders the message and a retry control', () => {
+  const react = hookReact([{ status: 'error', message: 'boom' }, {}, {}, '', '', null, '']);
+  const text = renderPanel(react, OURS);
+  assert.match(text, /boom/);
+  assert.match(text, /retry/);
+});
+
+test('the empty list says so instead of rendering nothing', () => {
+  const react = hookReact([
+    { status: 'ready', data: { patch: '/p', resourcesAvailable: true, servers: [] } },
+    {}, {}, '', '', null, '',
+  ]);
+  assert.match(renderPanel(react, OURS), /empty/);
+});
