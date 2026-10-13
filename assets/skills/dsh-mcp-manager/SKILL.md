@@ -34,8 +34,9 @@ confirmation.
    (spawn failure / timeout / HTTP status / tool list). Fix the entry (toggle,
    re-add with corrected input, `mcp_manager_update` the config) rather than
    guessing.
-6. **Report**: new tools are `mcp__<serverName>__<tool>` and appear in **new**
-   sessions; tell the user so if the current session cannot see them yet.
+6. **Report**: new tools are `mcp__<serverName>__<tool>`. DSH hot-reloads the
+   patch, so a running session picks them up with no restart — measured against a
+   live install; do not tell the user to start a new session.
 
 ## Rules
 

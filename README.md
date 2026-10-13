@@ -32,7 +32,9 @@ bundle automatically. After installation, eight tools become available to agents
 
 Verify after installation: the tool call returns `application: applied`; then call
 `mcp_manager_list` — it should show your servers (chrome-devtools, playwright,
-github, …). Tools become `mcp__<serverName>__<tool>` in **new** sessions.
+github, …). A server's tools appear as `mcp__<serverName>__<tool>` as soon as its
+row mounts: DSH hot-reloads the patch, so a running session picks them up with no
+restart (measured against a live install, 2026-10-13).
 
 ## CLI
 
