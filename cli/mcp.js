@@ -130,7 +130,12 @@ switch (cmd) {
       const r = await probeConfig(e.config, { timeoutMs: (flags.timeout ?? 60) * 1000 });
       const label = `${e.id} (${e.config?.transport})`;
       if (r.ok) console.log(`OK    ${label}: ${r.toolCount} tools${r.tools.length ? ' — ' + r.tools.join(', ') : ''}`);
-      else { failures++; console.log(`FAIL  ${label}: ${r.error}${r.detail ? ' | ' + r.detail.trim().slice(0, 200) : ''}`); }
+      else {
+        failures++;
+        console.log(`FAIL  ${label}: ${r.error}`);
+        if (r.hint) console.log(`  hint: ${r.hint}`);
+        if (r.detail) for (const l of r.detail.split('\n')) console.log(`  | ${l}`);
+      }
     }
     process.exit(failures ? 1 : 0);
     break;

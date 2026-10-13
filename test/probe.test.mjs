@@ -1,6 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { fileURLToPath } from 'node:url';
+import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { probeConfig } from '../lib/probe.js';
 import { resolveJsExprs, isJsExpr, evalJsExpr } from '../lib/jsexpr.js';
@@ -8,6 +10,7 @@ import { resolveJsExprs, isJsExpr, evalJsExpr } from '../lib/jsexpr.js';
 const dir = path.dirname(fileURLToPath(import.meta.url));
 const serverJs = path.join(dir, 'fixtures/mini-mcp-server.mjs');
 const httpJs = path.join(dir, 'fixtures/mini-mcp-http.mjs');
+const httpOnlyJs = path.join(dir, 'fixtures/http-only-server.mjs');
 
 test('stdio probe lists tools', async () => {
   const r = await probeConfig({ serverName: 'mini', transport: 'stdio', command: process.execPath, args: [serverJs] }, { timeoutMs: 15000 });
@@ -38,6 +41,64 @@ test('unreachable port fails with clear error', async () => {
 test('stdio command that exits immediately fails', async () => {
   const r = await probeConfig({ serverName: 'x', transport: 'stdio', command: process.execPath, args: ['-e', 'process.exit(3)'] }, { timeoutMs: 15000 });
   assert.equal(r.ok, false);
+});
+
+// ---- a package that is not a stdio server at all ------------------------------
+//
+// Measured against the live registry: `ai.ankimcp/anki-mcp-server` declares
+// `packages[0].transport.type: "stdio"`, but the package prints
+// "Server running on: http://127.0.0.1:3000" and never reads stdin. The probe
+// cannot know the registry is wrong, but it must not hide the evidence either:
+// the banner goes to STDOUT, which the probe used to discard while keeping only
+// stderr, so the one line that explained everything never reached the user.
+
+test('a stdio server that only prints an HTTP banner keeps the banner', async () => {
+  const r = await probeConfig({ serverName: 'http-only', transport: 'stdio', command: process.execPath, args: [httpOnlyJs] }, { timeoutMs: 6000 });
+  assert.equal(r.ok, false);
+  assert.match(r.error, /timed out/);
+  assert.match(r.detail, /Server running on: http:\/\/127\.0\.0\.1:3000/, 'stdout must not be thrown away');
+});
+
+test('an HTTP endpoint in the output produces a transport hint', async () => {
+  const r = await probeConfig({ serverName: 'http-only', transport: 'stdio', command: process.execPath, args: [httpOnlyJs] }, { timeoutMs: 6000 });
+  assert.match(r.hint, /may not be a stdio server/);
+  assert.match(r.hint, /http:\/\/127\.0\.0\.1:3000/);
+});
+
+test('a plain crash yields no transport hint', async () => {
+  const r = await probeConfig({ serverName: 'x', transport: 'stdio', command: process.execPath, args: ['-e', 'process.stderr.write("boom\\n"); process.exit(3)'] }, { timeoutMs: 15000 });
+  assert.equal(r.ok, false);
+  assert.equal(r.hint, '');
+  assert.match(r.detail, /boom/, 'stderr is still kept');
+});
+
+// The probe wraps `.cmd`/`.bat` in `cmd.exe /c`, so its direct child is the
+// wrapper and the real server is a GRANDCHILD. `child.kill()` signalled only the
+// wrapper, and the orphaned server kept holding its port — the next probe then
+// died with EADDRINUSE and reported "server exited early (code 1)", hiding the
+// real reason. Reproduced in isolation before this test existed.
+test('the probe kills the process tree, not only the cmd.exe wrapper', {
+  skip: process.platform === 'win32' ? false : 'the cmd.exe wrapper only exists on Windows',
+}, async () => {
+  const work = fs.mkdtempSync(path.join(os.tmpdir(), 'probe-tree-'));
+  const pidFile = path.join(work, 'pid.txt');
+  const shim = path.join(work, 'stubborn.cmd');
+  fs.writeFileSync(shim, `@echo off\r\n"${process.execPath}" "${httpOnlyJs}" "${pidFile}" %*\r\n`);
+  try {
+    const r = await probeConfig({ serverName: 'http-only', transport: 'stdio', command: shim, args: [] }, { timeoutMs: 6000 });
+    assert.equal(r.ok, false);
+    const pid = Number(fs.readFileSync(pidFile, 'utf8'));
+    assert.ok(pid > 0, 'the fixture must have recorded its pid');
+    // Give the kill a moment to land, then assert the process is really gone.
+    let alive = true;
+    for (let i = 0; i < 20 && alive; i++) {
+      await new Promise((res) => setTimeout(res, 100));
+      try { process.kill(pid, 0); } catch { alive = false; }
+    }
+    assert.equal(alive, false, `the server (pid ${pid}) survived the probe as an orphan`);
+  } finally {
+    fs.rmSync(work, { recursive: true, force: true });
+  }
 });
 
 // ---- !!js values: the loader hands back an inert marker, the probe must run it ----

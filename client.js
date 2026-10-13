@@ -54,6 +54,7 @@ window.__ModuleLoader__.load({
       toggleLabel: '启用或禁用 {id}',
       probeOk: '{count} 个工具',
       probeFailed: '探测失败：{error}',
+      probeHint: '提示：{hint}',
       addTitle: '新增服务器',
       addPlaceholder: '粘贴 npm 包名 / GitHub 仓库 / MCP 端点 / JSON 片段',
       parse: '解析',
@@ -119,6 +120,7 @@ window.__ModuleLoader__.load({
       toggleLabel: 'Enable or disable {id}',
       probeOk: '{count} tools',
       probeFailed: 'Probe failed: {error}',
+      probeHint: 'Hint: {hint}',
       addTitle: 'Add a server',
       addPlaceholder: 'Paste an npm package, GitHub repo, MCP endpoint, or JSON fragment',
       parse: 'Resolve',
@@ -206,8 +208,13 @@ window.__ModuleLoader__.load({
 
     function probeText(result, t) {
       if (!result) return '';
-      if (result.error) return t('probeFailed', { error: result.error });
-      return t('probeOk', { count: String(result.toolCount ?? 0) });
+      if (!result.error) return t('probeOk', { count: String(result.toolCount ?? 0) });
+      // A bare reason is what left the user hunting: "server exited early
+      // (code 1)" said nothing, while the child's own output named the problem.
+      const lines = [t('probeFailed', { error: result.error })];
+      if (result.hint) lines.push(t('probeHint', { hint: result.hint }));
+      if (result.detail) lines.push(String(result.detail).trim());
+      return lines.join('\n');
     }
 
     function errorMessage(payload, fallback) {
@@ -351,7 +358,7 @@ window.__ModuleLoader__.load({
 .dsh-mcp-dot[data-state="enabledOffline"] { color: var(--dsw-alias-state-warn-primary); }
 .dsh-mcp-dot[data-state="disabled"] { color: var(--dsw-alias-state-idle-primary); }
 .dsh-mcp-dot[data-state="unknown"] { background: transparent; border: 1.5px solid var(--dsw-alias-label-tertiary); }
-.dsh-mcp-result { font-size: 12px; color: var(--dsw-alias-label-secondary); }
+.dsh-mcp-result { font-size: 12px; color: var(--dsw-alias-label-secondary); white-space: pre-wrap; }
 .dsh-mcp-edit { display: flex; flex-direction: column; gap: 8px; }
 .dsh-mcp-button { font-size: 12px; padding: 4px 10px; border-radius: 6px; border: 1px solid var(--dsw-alias-border-l2); background: transparent; color: var(--dsw-alias-label-primary); cursor: pointer; }
 .dsh-mcp-button:hover:not(:disabled) { background: var(--dsw-alias-interactive-bg-hover); }

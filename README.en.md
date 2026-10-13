@@ -208,11 +208,23 @@ reproduces the file exactly, which is what the test suite asserts.
   and come back as `400 … header is badly formatted` — a healthy credential
   reported as a malformed one. An expression that cannot be evaluated is now
   reported by name instead of being forwarded.
+- **The registry's metadata can be wrong, and the market cannot tell.** Measured:
+  `ai.ankimcp/anki-mcp-server` declares `transport: {type: "stdio"}` while the
+  package is an HTTP server that binds `127.0.0.1:3000` and never reads stdin, so
+  a stdio entry for it can only fail. The market can only reproduce what the
+  registry says. When that happens the probe says so: it reports that the process
+  printed an http(s) endpoint without ever answering on stdio, and appends the
+  process's own output.
+- A probe kills the whole process tree, not just the command it spawned. This
+  matters on Windows, where `npx` resolves to `npx.cmd` and the probe's direct
+  child is therefore a `cmd.exe` wrapper around the real server; killing only the
+  wrapper left the server running and holding its port, which made the *next*
+  probe fail with a misleading startup error.
 
 ## Development
 
 ```sh
-node --test "test/*.test.mjs"   # 288 tests, zero dependencies
+node --test "test/*.test.mjs"   # 296 tests, zero dependencies
 node -e "import('./scripts/check-bundle.mjs').then(m => console.log(m.checkBundle('.')))"
 ```
 

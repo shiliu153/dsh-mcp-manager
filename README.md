@@ -236,6 +236,7 @@ docs/official/      从已安装的 DSH app.asar 中提取的官方规则
 - **版本漂移只能对钉住版本的条目判断**。市场安装的条目会钉版本；`add` 路径与手工写入的 `npx -y <pkg>` 没有版本锚点，市场会显示「版本未钉住，无法比对」而不是猜一个结论。
 - **已安装识别是推断的，不是记录的**。mcp-client 的 `config` 字段表固定，塞不进一个「来源」字段，所以市场靠 `serverName` 与执行面比对。用户既改了名字又改了 `args` 就会认不出来——这是漏报，不会误报。
 - **官方 registry 的搜索端点延迟波动很大**。实测（2026-10-13）`/v0/servers?search=…` 单次耗时在 1.2s 到 30s 之间，并偶发 HTTP 500。因此默认超时为 30s 且对 5xx 重试一次；registry 不可达时市场显示离线，已安装视图与探测完全不受影响。
+- **registry 的元数据可能是错的，市场无法识别**。实测 `ai.ankimcp/anki-mcp-server` 声明 `transport: {type: "stdio"}`，而该包实际是个绑定 `127.0.0.1:3000` 的 HTTP 服务器，从不读取 stdin——作为 stdio 条目必然失败。市场只能照抄 registry 的声明。这种情况下探测会给出提示：进程打印了 http(s) 端点却始终没有 stdio 应答，并附上该进程自己的输出。
 - 编辑只作用于条目的 `config:` 子树。`id` 与 `name` 不经此路径修改，`disabled` 由 `mcp_manager_toggle` 负责。
 - 本包自身的代码更新需要重启进程以加载新的 JavaScript 模块版本；HMR 只覆盖配置重载，不覆盖模块代码替换。
 - 命令行与 Agent 工具可以写入原始 `!!js` 文本，其信任级别与手工编辑 patch 文件相同。
@@ -267,7 +268,7 @@ docs/official/      从已安装的 DSH app.asar 中提取的官方规则
 <summary>维护者的工作上下文——点击展开</summary>
 
 ```sh
-node --test "test/*.test.mjs"   # 288 个测试，零依赖
+node --test "test/*.test.mjs"   # 296 个测试，零依赖
 node -e "import('./scripts/check-bundle.mjs').then(m => console.log(m.checkBundle('.')))"
 ```
 

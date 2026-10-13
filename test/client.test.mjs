@@ -161,6 +161,25 @@ test('probeText reports success and failure through the dictionary', () => {
   assert.equal(__test.probeText(null, t), '');
 });
 
+// A bare reason is what left the user hunting: "server exited early (code 1)"
+// said nothing, while the child's own output named the problem.
+test('probeText carries the hint and the child output through to the panel', () => {
+  const { __test } = loadModule().factory(requireStub);
+  const t = (key, vars) => `${key}:${JSON.stringify(vars ?? {})}`;
+  const text = __test.probeText({
+    error: 'server exited early (code 1)',
+    hint: 'the process printed http://127.0.0.1:3000 and never answered on stdio',
+    detail: 'Server running on: http://127.0.0.1:3000',
+  }, t);
+  assert.match(text, /probeFailed/);
+  assert.match(text, /probeHint/);
+  assert.match(text, /never answered on stdio/);
+  assert.match(text, /Server running on/);
+
+  // Nothing extra when the probe has nothing extra to say.
+  assert.ok(!__test.probeText({ error: 'boom' }, t).includes('probeHint'));
+});
+
 test('errorMessage prefers the server payload over the fallback', () => {
   const { __test } = loadModule().factory(requireStub);
   assert.equal(__test.errorMessage({ error: { message: 'nope' } }, 'fallback'), 'nope');
