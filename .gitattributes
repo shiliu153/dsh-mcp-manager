@@ -1,0 +1,8 @@
+# Normalize every text file to LF in the repository and in every working tree.
+#
+# lib/surgery.js anchors its top-level block regex on `$` and `.`, neither of
+# which tolerates a carriage return, so a CRLF checkout used to fail nine tests
+# on Windows while passing everywhere else. The parser normalizes line endings
+# itself now; this keeps future checkouts deterministic regardless of the
+# contributor's core.autocrlf.
+* text=auto eol=lf
