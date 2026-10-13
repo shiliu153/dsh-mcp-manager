@@ -41,6 +41,13 @@ window.__ModuleLoader__.load({
       probing: '探测中…',
       probeAll: '一键探测',
       probeAllLabel: '探测全部 {count} 个服务器',
+      edit: '编辑',
+      editLabel: '编辑 {id} 的配置',
+      validate: '校验并预览',
+      write: '写入',
+      jsPlaceholders: '占位符（由服务端回填，面板不可修改）：{items}',
+      editConflict: '文件已被外部修改，请重新加载后再改',
+      reload: '重新加载',
       remove: '删除',
       removeConfirm: '确认删除？',
       cancel: '取消',
@@ -69,6 +76,13 @@ window.__ModuleLoader__.load({
       probing: 'Probing…',
       probeAll: 'Probe all',
       probeAllLabel: 'Probe all {count} servers',
+      edit: 'Edit',
+      editLabel: 'Edit the config of {id}',
+      validate: 'Validate',
+      write: 'Write',
+      jsPlaceholders: 'Placeholders (refilled by the host, not editable here): {items}',
+      editConflict: 'The file changed on disk — reload before editing',
+      reload: 'Reload',
       remove: 'Delete',
       removeConfirm: 'Delete?',
       cancel: 'Cancel',
@@ -140,6 +154,24 @@ window.__ModuleLoader__.load({
       return payload?.error?.message ?? fallback;
     }
 
+    /**
+     * True when the text carries a `!!js` expression that is not a placeholder.
+     *
+     * The host hands the panel `!!js «k»` instead of the expression itself and
+     * refills it server-side; the browser must never send an expression back,
+     * because the harness Loader evaluates those at runtime. This is the local
+     * guard only — the route enforces the same rule and is the real boundary.
+     */
+    function hasRawJsExpr(text) {
+      return String(text ?? '').split('\n').some((l) => /!!js/.test(l) && !/!!js\s*«\d+»\s*$/.test(l));
+    }
+
+    /** Editor seed for one row; an uneditable row yields an empty, disabled seed. */
+    function openEditor(server) {
+      if (!server?.editable) return { id: '', text: '', editable: false, reason: server?.editReason ?? '' };
+      return { id: server.id, text: server.configText ?? '', editable: true, reason: '' };
+    }
+
     // ---- components ----
 
     /** Hook-free wrapper: the ownership test runs before any hook is called. */
@@ -203,6 +235,7 @@ window.__ModuleLoader__.load({
 .dsh-mcp-dot[data-state="disabled"] { color: var(--dsw-alias-state-idle-primary); }
 .dsh-mcp-dot[data-state="unknown"] { background: transparent; border: 1.5px solid var(--dsw-alias-label-tertiary); }
 .dsh-mcp-result { font-size: 12px; color: var(--dsw-alias-label-secondary); }
+.dsh-mcp-edit { display: flex; flex-direction: column; gap: 8px; }
 .dsh-mcp-button { font-size: 12px; padding: 4px 10px; border-radius: 6px; border: 1px solid var(--dsw-alias-border-l2); background: transparent; color: var(--dsw-alias-label-primary); cursor: pointer; }
 .dsh-mcp-button:hover:not(:disabled) { background: var(--dsw-alias-interactive-bg-hover); }
 .dsh-mcp-button:disabled { cursor: default; opacity: 0.5; }
@@ -233,6 +266,11 @@ window.__ModuleLoader__.load({
       const [addText, setAddText] = React.useState('');
       const [preview, setPreview] = React.useState(null);
       const [addError, setAddError] = React.useState('');
+      // Appended after the add-box state on purpose: the render smoke tests
+      // script useState by call order, so new state goes at the end.
+      const [editing, setEditing] = React.useState('');
+      const [editText, setEditText] = React.useState('');
+      const [editState, setEditState] = React.useState(null);
       const abortRef = React.useRef(null);
 
       const setBusyKey = (key, value) => setBusy((b) => {
@@ -325,6 +363,49 @@ window.__ModuleLoader__.load({
         }
       }
 
+      function startEdit(server) {
+        const seed = openEditor(server);
+        if (!seed.editable) return;
+        setEditing(seed.id);
+        setEditText(seed.text);
+        setEditState(null);
+        setConfirming('');
+      }
+
+      function stopEdit() {
+        setEditing('');
+        setEditText('');
+        setEditState(null);
+      }
+
+      async function runEdit(confirm) {
+        setEditState(null);
+        if (hasRawJsExpr(editText)) {
+          setEditState({ errors: [t('jsPlaceholders', { items: '' })] });
+          return;
+        }
+        setBusyKey('__edit', confirm ? 'write' : 'validate');
+        try {
+          const payload = await post('/update', {
+            id: editing, config: editText, confirm,
+            expectMtime: state.status === 'ready' ? state.data?.mtimeMs : undefined,
+          });
+          setEditState({ preview: payload.preview, warnings: payload.warnings ?? [] });
+          if (confirm) {
+            const edited = editing;
+            stopEdit();
+            await load();
+            await runProbe(edited);
+          }
+        } catch (e) {
+          const msg = String(e?.message || e);
+          const conflict = /file_changed|FileChangedExternally/.test(msg);
+          setEditState({ errors: [conflict ? t('editConflict') : msg], conflict });
+        } finally {
+          setBusyKey('__edit', '');
+        }
+      }
+
       async function runParse() {
         setAddError('');
         setBusyKey('__add', 'parse');
@@ -374,6 +455,12 @@ window.__ModuleLoader__.load({
               h('span', { className: 'dsh-mcp-meta' }, s.transport),
               h('span', { className: 'dsh-mcp-actions' },
                 h('button', {
+                  type: 'button', className: 'dsh-mcp-button',
+                  disabled: isBusy || !s.editable,
+                  title: s.editable ? t('editLabel', { id: s.id }) : s.editReason,
+                  onClick: () => startEdit(s),
+                }, t('edit')),
+                h('button', {
                   type: 'button', className: 'dsh-mcp-button', disabled: isBusy,
                   onClick: () => runProbe(s.id),
                 }, busy[s.id] === 'probe' ? t('probing') : t('probe')),
@@ -389,6 +476,29 @@ window.__ModuleLoader__.load({
                   onClick: () => runToggle(s),
                 }, h('span', { className: 'dsh-mcp-thumb' })))),
             h('div', { className: 'dsh-mcp-target' }, commandLine(s)),
+            editing === s.id
+              ? h('div', { className: 'dsh-mcp-edit' },
+                  h('textarea', {
+                    className: 'dsh-mcp-input', value: editText,
+                    onChange: (e) => setEditText(e.target.value),
+                  }),
+                  (s.jsExprs ?? []).length
+                    ? h('div', { className: 'dsh-mcp-meta' }, t('jsPlaceholders', { items: s.jsExprs.join('; ') }))
+                    : null,
+                  h('div', { className: 'dsh-mcp-actions' },
+                    h('button', { type: 'button', className: 'dsh-mcp-button', disabled: Boolean(busy.__edit),
+                      onClick: () => runEdit(false) }, t('validate')),
+                    h('button', { type: 'button', className: 'dsh-mcp-button', disabled: Boolean(busy.__edit),
+                      onClick: () => runEdit(true) }, t('write')),
+                    h('button', { type: 'button', className: 'dsh-mcp-button', onClick: stopEdit }, t('cancel'))),
+                  (editState?.errors ?? []).map((x, i) => h('div', { key: `e${i}`, className: 'dsh-mcp-error' }, x)),
+                  editState?.conflict
+                    ? h('div', { className: 'dsh-mcp-actions' },
+                        h('button', { type: 'button', className: 'dsh-mcp-button',
+                          onClick: () => { stopEdit(); load(); } }, t('reload')))
+                    : null,
+                  editState?.preview ? h('div', { className: 'dsh-mcp-preview' }, editState.preview) : null)
+              : null,
             probes[s.id] ? h('div', { className: 'dsh-mcp-result' }, probeText(probes[s.id], t)) : null,
             confirming === s.id
               ? h('div', { className: 'dsh-mcp-actions' },
@@ -461,7 +571,7 @@ window.__ModuleLoader__.load({
           inject: () => ({ t }),
         }, Panel));
       },
-      __test: { NS, BUNDLE_NAME, API, isOurs, badgeState, badgeKey, dotProps, commandLine, probeText, errorMessage, ZH, EN },
+      __test: { NS, BUNDLE_NAME, API, isOurs, badgeState, badgeKey, dotProps, commandLine, probeText, errorMessage, hasRawJsExpr, openEditor, ZH, EN },
     };
   },
 });

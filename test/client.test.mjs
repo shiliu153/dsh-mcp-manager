@@ -447,3 +447,64 @@ test('probe-all is not offered while the list is still loading', () => {
   const node = renderPanelNode(react, OURS, primitivesStub([]));
   assert.equal(findByProp(node, 'title', 'probeAllLabel'), undefined);
 });
+
+// ---- editing a row's config --------------------------------------------------
+
+test('hasRawJsExpr spots an expression the panel must not send back', () => {
+  const { __test } = loadModule().factory(requireStub);
+  assert.equal(__test.hasRawJsExpr('Authorization: !!js «0»'), false);
+  assert.equal(__test.hasRawJsExpr('X: !!js process.env.HOME'), true);
+  assert.equal(__test.hasRawJsExpr('serverName: x'), false);
+  assert.equal(__test.hasRawJsExpr(undefined), false);
+});
+
+test('openEditor refuses a row the host marked uneditable', () => {
+  const { __test } = loadModule().factory(requireStub);
+
+  const refused = __test.openEditor({ id: 'mcp-github', configText: 'x', jsExprs: [], editable: false, editReason: 'hardcoded secret' });
+  assert.equal(refused.id, '');
+  assert.equal(refused.text, '');
+  assert.equal(refused.editable, false);
+  assert.equal(refused.reason, 'hardcoded secret');
+
+  const seed = __test.openEditor({ id: 'mcp-gamma', configText: 'serverName: gamma', jsExprs: ['credential file: C:/x'], editable: true, editReason: '' });
+  assert.equal(seed.id, 'mcp-gamma');
+  assert.equal(seed.text, 'serverName: gamma');
+  assert.equal(seed.editable, true);
+  assert.equal(seed.reason, '');
+});
+
+const EDIT_ROWS = [
+  { id: 'mcp-a', serverName: 'alpha', transport: 'stdio', command: 'npx', args: [], url: '', disabled: false, live: true,
+    configText: 'serverName: alpha', jsExprs: [], editable: true, editReason: '' },
+  { id: 'mcp-b', serverName: 'beta', transport: 'stdio', command: 'node', args: [], url: '', disabled: false, live: false,
+    configText: 'serverName: beta', jsExprs: [], editable: false, editReason: 'hardcoded secret' },
+];
+
+test('every row offers Edit, and a row the host refuses is disabled with its reason', () => {
+  const react = hookReact([
+    { status: 'ready', data: { patch: '/p', mtimeMs: 1, resourcesAvailable: true, servers: EDIT_ROWS } },
+    {}, {}, '', '', null, '',
+  ]);
+  const node = renderPanelNode(react, OURS, primitivesStub([]));
+  const editable = findByProp(node, 'title', 'editLabel');
+  assert.ok(editable, 'the editable row must offer an Edit control');
+  assert.equal(editable.type, 'button');
+  assert.equal(editable.props.disabled, false);
+
+  const blocked = findByProp(node, 'title', 'hardcoded secret');
+  assert.ok(blocked, 'an uneditable row carries its reason as the tooltip');
+  assert.equal(blocked.props.disabled, true);
+});
+
+test('the open editor shows the row subtree and its placeholder hints', () => {
+  const rows = [{ ...EDIT_ROWS[0], jsExprs: ['credential file: C:/x/token.txt'] }];
+  const react = hookReact([
+    { status: 'ready', data: { patch: '/p', mtimeMs: 1, resourcesAvailable: true, servers: rows } },
+    {}, {}, '', '', null, '', 'mcp-a', 'serverName: alpha', null,
+  ]);
+  const node = renderPanelNode(react, OURS, primitivesStub([]));
+  const area = findByClass(node, 'dsh-mcp-input');
+  assert.equal(area.props.value, 'serverName: alpha', 'the editor is seeded with the host subtree');
+  assert.match(textOf(node).join(' | '), /jsPlaceholders/);
+});
