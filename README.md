@@ -67,6 +67,8 @@ section listing your registered MCP servers:
   shows the state as text in the host's `Tooltip`;
 - **Probe** per row: a real handshake reporting the tool count, or the failure
   reason. Nothing is probed automatically; the list opens instantly;
+- **Probe all** in the panel header: one click probes every registered server
+  concurrently and reports per row;
 - an enable/disable switch, and a delete that asks once inline;
 - an add box: paste an npm package, GitHub repo, MCP endpoint or JSON fragment,
   see the exact YAML that would be appended, then write it.

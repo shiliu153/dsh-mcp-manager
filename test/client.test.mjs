@@ -416,3 +416,34 @@ test('the empty list says so instead of rendering nothing', () => {
   ]);
   assert.match(renderPanel(react, OURS), /empty/);
 });
+
+test('the header offers one-click probing of every registered server', () => {
+  const react = hookReact([
+    { status: 'ready', data: { patch: '/p', resourcesAvailable: true, servers: [
+      { id: 'mcp-a', serverName: 'alpha', transport: 'stdio', command: 'npx', args: ['-y', 'x'], url: '', disabled: false, live: true },
+      { id: 'mcp-b', serverName: 'beta', transport: 'stdio', command: 'node', args: [], url: '', disabled: false, live: false },
+    ] } },
+    {}, {}, '', '', null, '',
+  ]);
+  const node = renderPanelNode(react, OURS, primitivesStub([]));
+  const button = findByProp(node, 'title', 'probeAllLabel');
+  assert.ok(button, 'the header must offer a probe-all control');
+  assert.equal(button.type, 'button');
+  assert.equal(button.props.disabled, false);
+  assert.equal(textOf(button).join(''), 'probeAll');
+});
+
+test('probe-all is not offered when there is nothing to probe', () => {
+  const react = hookReact([
+    { status: 'ready', data: { patch: '/p', resourcesAvailable: true, servers: [] } },
+    {}, {}, '', '', null, '',
+  ]);
+  const node = renderPanelNode(react, OURS, primitivesStub([]));
+  assert.equal(findByProp(node, 'title', 'probeAllLabel'), undefined);
+});
+
+test('probe-all is not offered while the list is still loading', () => {
+  const react = hookReact([{ status: 'loading' }, {}, {}, '', '', null, '']);
+  const node = renderPanelNode(react, OURS, primitivesStub([]));
+  assert.equal(findByProp(node, 'title', 'probeAllLabel'), undefined);
+});

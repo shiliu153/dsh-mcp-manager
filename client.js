@@ -285,6 +285,21 @@ window.__ModuleLoader__.load({
         }
       }
 
+      // One click, every row. Fanning out to the existing per-row probe keeps
+      // progress and results per row for free, and needs no new server route.
+      // Disabled servers are probed too: a probe answers "does this config
+      // start at all", which is a question the switch does not gate.
+      async function runProbeAll() {
+        const servers = state.status === 'ready' ? state.data?.servers ?? [] : [];
+        if (servers.length === 0) return;
+        setBusyKey('__all', 'probe');
+        try {
+          await Promise.all(servers.map((s) => runProbe(s.id)));
+        } finally {
+          setBusyKey('__all', '');
+        }
+      }
+
       async function runToggle(server) {
         setBusyKey(server.id, 'toggle');
         try {
@@ -391,8 +406,16 @@ window.__ModuleLoader__.load({
         h('style', null, CSS),
         h('div', { className: 'dsh-mcp-head' },
           h('span', { className: 'dsh-mcp-title' }, t('title')),
-          h('button', { type: 'button', className: 'dsh-mcp-button', disabled: state.status === 'loading',
-            onClick: load }, t('refresh'))),
+          h('span', { className: 'dsh-mcp-actions' },
+            state.status === 'ready' && (state.data?.servers ?? []).length > 0
+              ? h('button', {
+                  type: 'button', className: 'dsh-mcp-button', disabled: Boolean(busy.__all),
+                  title: t('probeAllLabel', { count: String((state.data?.servers ?? []).length) }),
+                  onClick: runProbeAll,
+                }, busy.__all ? t('probing') : t('probeAll'))
+              : null,
+            h('button', { type: 'button', className: 'dsh-mcp-button', disabled: state.status === 'loading',
+              onClick: load }, t('refresh')))),
         state.status === 'ready' && state.data?.patch
           ? h('div', { className: 'dsh-mcp-path' }, `${t('patch')}: ${state.data.patch}`)
           : null,
