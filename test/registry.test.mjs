@@ -78,6 +78,20 @@ test('a network error is retried once, then degraded', async () => {
   assert.match(r.degraded, /ENOTFOUND/);
 });
 
+// Node's fetch says only "fetch failed"; the errno lives on `cause`. Reporting
+// the bare message made an offline registry indistinguishable from a DNS
+// failure or a refused connection.
+test('a wrapped fetch error reports its underlying cause', async () => {
+  clearRegistryCache();
+  const fetchFn = fakeFetch(() => {
+    const e = new TypeError('fetch failed');
+    e.cause = { code: 'ECONNREFUSED' };
+    throw e;
+  });
+  const r = await searchServers({ query: 'x', fetchFn });
+  assert.match(r.degraded, /fetch failed \(ECONNREFUSED\)/);
+});
+
 test('an oversized body is refused by the content-length pre-check', async () => {
   clearRegistryCache();
   const fetchFn = fakeFetch(() => jsonResponse({ servers: [] }, { headers: { 'content-length': String(3 * 1024 * 1024) } }));

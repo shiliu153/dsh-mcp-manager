@@ -1,7 +1,7 @@
 {
   "name": "@dsh-contrib/dsh-mcp-manager",
-  "version": "0.4.4",
-  "description": "Manage DSH MCP servers: list, probe, install, toggle, remove, rotate credentials.",
+  "version": "0.5.0",
+  "description": "Manage DSH MCP servers: search the official registry, list, probe, install, toggle, remove, rotate credentials.",
   "private": true,
   "type": "module",
   "bin": { "dsh-mcp": "./cli/mcp.js" },

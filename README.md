@@ -2,7 +2,7 @@
 
 [English](README.en.md) | 中文
 
-对登记在 DSH patch 文件中的 MCP 服务器条目提供查看、探测、安装、编辑、启停、删除与凭据轮换。条目格式遵循官方 `@deepseek-ai/dsh-mcp-client` 的配置契约，全部写入经过同一条带守卫的管线。
+对登记在 DSH patch 文件中的 MCP 服务器条目提供搜索、查看、探测、安装、编辑、启停、删除与凭据轮换。条目格式遵循官方 `@deepseek-ai/dsh-mcp-client` 的配置契约，全部写入经过同一条带守卫的管线。
 
 ## 概述
 
@@ -11,6 +11,8 @@
 本包把这一过程收敛为受校验的操作。写入先经过 DSH 自身加载器与官方字段规则校验，通过后才以原子方式落盘并保留 `.bak` 备份；未通过校验的候选内容不会触及实际文件。
 
 同一套引擎驱动三个界面：Agent 工具（`mcp_manager_*`）、命令行（`cli/mcp.js`）与 Web 面板。凭据轮换仅在 Agent 工具与命令行中提供，面板不允许写入原始 `!!js` 表达式。
+
+**市场**以官方 [MCP Registry](https://registry.modelcontextprotocol.io) 为唯一目录源：搜索、看详情、安装，写入走的仍是同一条管线。市场不引入任何绕过路径，也不假装条目经过审核——registry 是任何人可发布的。
 
 ## 目录
 
@@ -47,15 +49,16 @@ plugin_manager install_bundle https://github.com/shiliu153/dsh-mcp-manager
 
 ### Agent 工具
 
-安装后以下八个工具对 agent 可用。写入类工具默认只执行预演：先返回将要写入的内容与各项校验结果，确认无误后再以 `confirm: true` 重新调用。
+安装后以下九个工具对 agent 可用。写入类工具默认只执行预演：先返回将要写入的内容与各项校验结果，确认无误后再以 `confirm: true` 重新调用。
 
 | 工具 | 用途 | 需确认 |
 |---|---|:---:|
 | `mcp_manager_list` | 列出已登记服务器，凭据值已掩码 | — |
+| `mcp_manager_search` | 搜索官方 MCP Registry，报告可安装性、执行面与缺口 | — |
 | `mcp_manager_probe` | 对单台或全部服务器执行真实握手 | — |
 | `mcp_manager_validate` | 按官方 mcp-client 规则校验条目 | — |
 | `mcp_manager_credential` | 定位、掩码显示或轮换凭据文件 | — |
-| `mcp_manager_add` | 从粘贴的地址新增服务器 | 是 |
+| `mcp_manager_add` | 从粘贴的地址新增服务器；`source: "registry"` 时输入按 registry 名解释 | 是 |
 | `mcp_manager_update` | 替换某条目的 `config:` 子树 | 是 |
 | `mcp_manager_toggle` | 启用或禁用条目 | 是 |
 | `mcp_manager_remove` | 移除条目 | 是 |
@@ -67,6 +70,8 @@ plugin_manager install_bundle https://github.com/shiliu153/dsh-mcp-manager
 ```sh
 node cli/mcp.js list [--json]
 node cli/mcp.js probe [--id <id>] [--timeout 60]
+node cli/mcp.js search <query> [--limit 20] [--cursor <c>] [--json]
+node cli/mcp.js install <registry-name> [--version <v>] [--yes] [--no-probe]
 node cli/mcp.js add "<npm-package | github-url | mcp-url | json>" [--yes] [--no-probe]
 node cli/mcp.js show <id> [--json] [--masked]
 node cli/mcp.js edit <id> [--config <file>] [--yes]      # 省略 --config 时读取 stdin
@@ -80,9 +85,10 @@ node cli/mcp.js schema
 | 参数 | 含义 |
 |---|---|
 | `--file <path>` | 指定 patch 文件；缺省为 `$DSH_HOME/cordis.patch.yml` 或 `~/.dsh/cordis.patch.yml`。 |
-| `--json` | 输出机器可读结果（`list`、`show`）。 |
+| `--json` | 输出机器可读结果（`list`、`show`、`search`）。 |
 | `--yes` | 跳过确认。 |
 | `--masked` | `show` 时以占位符替换 `!!js` 表达式。 |
+| `--registry-base <url>` | `search` / `install` 使用的 registry 基址，缺省为官方 registry。 |
 
 退出码：`0` 成功，`1` 失败，`2` 用法错误。
 
@@ -106,6 +112,28 @@ node cli/mcp.js schema
 - **启用 / 禁用开关**，以及一次内联确认的**删除**。
 - **新增服务器**——粘贴上述四种格式之一，点击**解析**生成预览，确认将要追加的 YAML 内容后再写入。
 - **刷新**——重新读取 patch 文件与实时连接状态。
+
+### 市场
+
+面板顶部有两个标签：**已安装**（上述视图）与**市场**。市场是只读的发现面，不触盘写。
+
+搜索走官方 registry。**它只匹配名称**（反域名，如 `ai.ankimcp/anki-mcp-server`），不匹配描述——所以搜 `anki` 也会带回 `banking-*`。返回页会在本地按标题与描述重排，把精确命中提上来，界面上也如实标注这一点。
+
+点开一条结果，**执行面是不可折叠的**：
+
+- stdio 条目逐字显示将要执行的完整命令行，等宽字体，例如 `npx -y @ankimcp/anki-mcp-server@0.27.0`；
+- 远程条目逐字显示将要连接的 URL；
+- 运行时不在 PATH 上时红字标注。
+
+同一屏还列出出处（发布者、registry 名、版本、仓库与主页链接、是否已弃用）与**还缺哪些凭据**。
+
+**勾选框只在 stdio 条目上出现。** `npx -y <任意包>` 是在本机执行任意代码；远程 URL 只是把查询发给第三方，与使用任何 Web API 同级。对两者都要求勾选，只会训练用户无脑点过，反而削弱真正重要的那一道。需要凭据、运行时缺失、条目已弃用都用醒目警告表达，不额外加闸。
+
+**市场不写入凭据。** 需要秘密的条目照常可装，但秘密字段被**省略**而不是填占位值——patch 里永远不会出现假凭据。装完后首次探测会返回 401，这正是"你还没补凭据"的准确信号；用 `dsh-mcp credential <id> set <值>` 或让 agent 调用 `mcp_manager_credential` 补上。
+
+**不支持的条目直接不显示**：`sse` 传输（DSH 的 mcp-client 不认），以及 `cargo` / `nuget` / `mcpb` 包类型。
+
+**已安装标记与版本漂移**：市场按推导出的 `serverName`（首选）或执行面（用户改过名字时）认出已经装过的服务器，并标出「已安装」。漂移只在条目**钉住版本**时才可能判断——市场安装的条目会钉版本，而 `add` 路径写的是不钉版本的 `npx -y <pkg>`，后者会如实显示「版本未钉住，无法比对」，不会假装已是最新。更新走既有的 `mcp_manager_update` 管线，仍需确认。
 
 面板通过 `ctx.connection.registerFetchRoute` 在 `/api/dsh-mcp-manager/` 下注册精确的 Fetch 路由，因此 harness 自身的 Host/Origin 校验与浏览器会话认证先于任何处理函数执行。面板自身不实现信任边界，所有写入都经过与命令行相同的带守卫管线。
 
@@ -171,6 +199,8 @@ lib/                共享引擎
   surgery.js        保留注释的文本手术：增删条目、启停、替换 config 子树
   rules.js          官方 dsh-mcp-client 条目字段规则
   resolve.js        将粘贴的项目地址解析为官方 patch 条目
+  registry.js       与官方 MCP Registry 对话（超时、响应体上限、重试、TTL 缓存）
+  market.js         registry 条目 → 候选条目；已安装识别与版本漂移（纯函数）
   probe.js          真实 MCP 握手（stdio 与 streamable-http）
   rows.js           行筛选与凭据掩码（命令行、宿主工具与面板共用同一实现）
   update.js         编辑策略：!!js 占位符协议与语义闸门
@@ -203,6 +233,9 @@ docs/official/      从已安装的 DSH app.asar 中提取的官方规则
 
 - 面板不写入 `!!js` 表达式。Loader 在运行时对表达式求值，等同于在 harness 进程中执行代码，因此面板只提交不透明占位符（`Authorization: !!js «0»`），由宿主原样回填。凭据轮换与表达式改动需经命令行或 Agent 工具。
 - 面板中携带硬编码密钥的条目为只读，需经命令行或 Agent 工具处理。
+- **版本漂移只能对钉住版本的条目判断**。市场安装的条目会钉版本；`add` 路径与手工写入的 `npx -y <pkg>` 没有版本锚点，市场会显示「版本未钉住，无法比对」而不是猜一个结论。
+- **已安装识别是推断的，不是记录的**。mcp-client 的 `config` 字段表固定，塞不进一个「来源」字段，所以市场靠 `serverName` 与执行面比对。用户既改了名字又改了 `args` 就会认不出来——这是漏报，不会误报。
+- **官方 registry 的搜索端点延迟波动很大**。实测（2026-10-13）`/v0/servers?search=…` 单次耗时在 1.2s 到 30s 之间，并偶发 HTTP 500。因此默认超时为 30s 且对 5xx 重试一次；registry 不可达时市场显示离线，已安装视图与探测完全不受影响。
 - 编辑只作用于条目的 `config:` 子树。`id` 与 `name` 不经此路径修改，`disabled` 由 `mcp_manager_toggle` 负责。
 - 本包自身的代码更新需要重启进程以加载新的 JavaScript 模块版本；HMR 只覆盖配置重载，不覆盖模块代码替换。
 - 命令行与 Agent 工具可以写入原始 `!!js` 文本，其信任级别与手工编辑 patch 文件相同。
@@ -234,7 +267,7 @@ docs/official/      从已安装的 DSH app.asar 中提取的官方规则
 <summary>维护者的工作上下文——点击展开</summary>
 
 ```sh
-node --test "test/*.test.mjs"   # 179 个测试，零依赖
+node --test "test/*.test.mjs"   # 288 个测试，零依赖
 node -e "import('./scripts/check-bundle.mjs').then(m => console.log(m.checkBundle('.')))"
 ```
 

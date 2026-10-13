@@ -3,9 +3,10 @@
 [English](README.en.md) | [中文](README.md)
 
 A [DeepSeek Harness](https://github.com/topics/dsh-plugin) bundle that manages MCP
-servers registered in your DSH patch files: list, real-handshake probe, add from a
-pasted project reference, enable/disable, remove, and credential rotation —
-following the official `@deepseek-ai/dsh-mcp-client` configuration contract.
+servers registered in your DSH patch files: search the official registry, list,
+real-handshake probe, add from a pasted project reference, enable/disable, remove,
+and credential rotation — following the official `@deepseek-ai/dsh-mcp-client`
+configuration contract.
 
 ## Install
 
@@ -19,13 +20,14 @@ plugin_manager install_bundle https://github.com/shiliu153/dsh-mcp-manager
 install from the GitHub URL above.
 
 Both official channels run pnpm, validate the bundle manifest, and select the
-bundle automatically. After installation, eight tools become available to agents:
+bundle automatically. After installation, nine tools become available to agents:
 
 | Tool | Purpose |
 |---|---|
 | `mcp_manager_list` | List registered MCP servers (credential values masked) |
+| `mcp_manager_search` | Search the official MCP Registry; reports installability, the execution surface and any gaps |
 | `mcp_manager_probe` | Real MCP handshake (`initialize` + `tools/list`) against one or all servers |
-| `mcp_manager_add` | Paste an npm package / GitHub repo URL / MCP endpoint URL / JSON config; dry-run by default, `confirm: true` writes it |
+| `mcp_manager_add` | Paste an npm package / GitHub repo URL / MCP endpoint URL / JSON config; with `source: "registry"` the input is read as a registry name. Dry-run by default, `confirm: true` writes it |
 | `mcp_manager_update` | Replace one entry's `config:` subtree with YAML text; dry-run by default, `confirm: true` writes it |
 | `mcp_manager_remove` | Remove an entry (`confirm: true` required) |
 | `mcp_manager_toggle` | Enable/disable an entry (`confirm: true` required) |
@@ -45,6 +47,8 @@ The bundle also ships a zero-dependency CLI (same engine, no harness needed):
 ```sh
 node cli/mcp.js list [--json]
 node cli/mcp.js probe [--id <id>] [--timeout 60]
+node cli/mcp.js search <query> [--limit 20] [--cursor <c>] [--json]
+node cli/mcp.js install <registry-name> [--version <v>] [--yes] [--no-probe]
 node cli/mcp.js add "<npm-package | github-url | mcp-url | json>" [--yes] [--no-probe]
 node cli/mcp.js show <id> [--json] [--masked]
 node cli/mcp.js edit <id> [--config <file>] [--yes]      # no --config reads stdin
@@ -58,6 +62,9 @@ node cli/mcp.js schema
 All writes go through the same guarded pipeline: surgery on a candidate copy →
 validation with DSH's own loader (`loadOptionalPatches`) → atomic write with a
 `.bak` backup. A candidate that fails validation never reaches your live patch.
+
+`--registry-base <url>` overrides the registry base for `search` / `install`
+(defaults to the official registry).
 
 ## Panel (Web GUI)
 
@@ -92,6 +99,52 @@ Credential **rotation** stays in the CLI and the agent tools. Editing itself is
 available in all three surfaces; the CLI and `mcp_manager_update` may write raw
 `!!js` text (the same trust level as editing the patch file by hand), the panel
 may not.
+
+### Market
+
+The panel header carries two tabs: **Installed** (everything above) and **Market**.
+The market is a read-only discovery surface — it never writes to the patch file.
+
+Search goes to the official registry, which **matches names only** (reverse-DNS,
+e.g. `ai.ankimcp/anki-mcp-server`), not descriptions — so `anki` also returns
+`banking-*`. The returned page is re-ranked locally by title and description to
+lift the exact hit, and the UI says so out loud rather than implying otherwise.
+
+Opening a result shows an **execution surface that cannot be collapsed**:
+
+- for a stdio entry, the exact command line that would run, verbatim and
+  monospaced, e.g. `npx -y @ankimcp/anki-mcp-server@0.27.0`;
+- for a remote entry, the exact URL that would be connected to;
+- a red note when the runtime is not on `PATH`.
+
+The same view lists provenance (publisher, registry name, version, repository and
+website links, deprecation status) and **which credentials are still missing**.
+
+**The tick box appears for stdio entries only.** `npx -y <anything>` runs arbitrary
+code on this machine; a remote URL only sends queries to a third party, the same
+as any web API. Demanding a tick for both trains people to click through it, which
+weakens the one that matters. Credential gaps, a missing runtime and deprecation
+are shown as prominent warnings instead.
+
+**The market never writes credentials.** Entries that need secrets install fine,
+but the secret fields are **omitted** rather than filled with placeholders — a fake
+credential never reaches the patch. The first probe then returns 401, which is the
+accurate signal that the value is still missing; set it with
+`dsh-mcp credential <id> set <value>` or let the agent call
+`mcp_manager_credential`.
+
+**Entries this plugin cannot run are not listed at all**: the `sse` transport
+(dsh-mcp-client does not accept it), and the `cargo` / `nuget` / `mcpb` package
+types.
+
+**Installed marking and version drift.** The market recognises a server it already
+manages by the derived `serverName` first, and by the execution surface when the
+user renamed the row, and labels it "Installed". Drift is only decidable when the
+row **pins a version** — market installs pin one, while the `add` path writes a
+bare `npx -y <pkg>`. The latter honestly reports "installed without a pinned
+version, so it cannot be compared" instead of claiming to be current. Updating
+goes through the existing `mcp_manager_update` pipeline and still needs
+confirmation.
 
 It talks to the host over exact Fetch routes under `/api/dsh-mcp-manager/`,
 registered through `ctx.connection.registerFetchRoute` so the harness's own
@@ -159,7 +212,7 @@ reproduces the file exactly, which is what the test suite asserts.
 ## Development
 
 ```sh
-node --test "test/*.test.mjs"   # 179 tests, zero dependencies
+node --test "test/*.test.mjs"   # 288 tests, zero dependencies
 node -e "import('./scripts/check-bundle.mjs').then(m => console.log(m.checkBundle('.')))"
 ```
 

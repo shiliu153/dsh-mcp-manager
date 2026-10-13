@@ -169,6 +169,29 @@ test('deriveMarketServerName sanitises, clamps and de-duplicates', () => {
   assert.equal(deriveMarketServerName('ai.x/' + long, [long]).length, 32);
 });
 
+// Measured against the live registry: a large share of publishers register
+// `…/mcp-server`. Taking the name half verbatim yields `serverName: mcp-server`,
+// which identifies nothing and collides with the next publisher who does the
+// same — so the namespace is the only part worth keeping.
+test('a generic name half falls back to the publisher namespace', () => {
+  assert.equal(deriveMarketServerName('ai.adadvisor/mcp-server'), 'adadvisor');
+  assert.equal(deriveMarketServerName('ai.2kw/mcp-server'), '2kw');
+  assert.equal(deriveMarketServerName('ai.agenttrust/mcp-server'), 'agenttrust');
+  assert.equal(deriveMarketServerName('ai.x/mcp'), 'x');
+  assert.equal(deriveMarketServerName('ai.x/server'), 'x');
+  // A meaningful name half is still preferred over the namespace.
+  assert.equal(deriveMarketServerName('ai.ankimcp/anki-mcp-server'), 'anki-mcp-server');
+});
+
+test('a generic name half with an unusable namespace still yields a name', () => {
+  // Nothing identifies this one, so the registry's own tail is the most honest
+  // answer available — inventing `server` would be no more informative.
+  assert.equal(deriveMarketServerName('mcp-server'), 'mcp-server');
+  assert.equal(deriveMarketServerName('!!!'), 'server');
+  assert.equal(deriveMarketServerName(''), 'server');
+  assert.equal(deriveMarketServerName(undefined), 'server');
+});
+
 test('toEntry produces the row shape renderEntryRow expects', () => {
   const c = toCandidate(entry({ packages: [{ registryType: 'npm', identifier: 'thing', version: '1.0.0', transport: { type: 'stdio' } }] }));
   const row = toEntry(c);
