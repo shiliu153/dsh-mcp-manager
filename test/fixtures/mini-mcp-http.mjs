@@ -1,9 +1,19 @@
 // Minimal streamable-http MCP server for probe tests (node:http only).
+//
+// `requireAuth` mirrors GitHub's own behaviour: a header that is missing or
+// malformed is rejected with 400 "Authorization header is badly formatted",
+// which is exactly what a probe that forwards the loader's inert `!!js` marker
+// (`[object Object]`) used to trigger.
 import http from 'node:http';
 
-export function startMiniHttp(port) {
+export function startMiniHttp(port, { requireAuth } = {}) {
   return http.createServer((req, res) => {
     if (req.method !== 'POST') { res.writeHead(405); res.end(); return; }
+    if (requireAuth && req.headers.authorization !== requireAuth) {
+      res.writeHead(400, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ error: 'bad request: Authorization header is badly formatted' }));
+      return;
+    }
     let body = '';
     req.on('data', (d) => { body += d; });
     req.on('end', () => {

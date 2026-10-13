@@ -135,11 +135,17 @@ reproduces the file exactly, which is what the test suite asserts.
   with `file_changed` instead of clobbering it.
 - Probes are read-only; they never start browsers or send credentials anywhere
   beyond the server's own endpoint.
+- A probe resolves `!!js` values the way the harness does before sending them.
+  The loader hands back an inert `{ __jsExpr }` marker, so a credential written
+  as an expression used to reach the server as `Authorization: [object Object]`
+  and come back as `400 … header is badly formatted` — a healthy credential
+  reported as a malformed one. An expression that cannot be evaluated is now
+  reported by name instead of being forwarded.
 
 ## Development
 
 ```sh
-node --test "test/*.test.mjs"   # 159 tests, zero dependencies
+node --test "test/*.test.mjs"   # 167 tests, zero dependencies
 node -e "import('./scripts/check-bundle.mjs').then(m => console.log(m.checkBundle('.')))"
 ```
 
