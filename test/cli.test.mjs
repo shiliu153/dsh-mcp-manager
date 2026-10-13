@@ -83,3 +83,70 @@ test('add --yes writes the entry', () => {
 test('usage error exits 2', () => {
   assert.equal(run(['bogus-command']).status, 2);
 });
+
+test('show prints the subtree verbatim so it can be piped back', () => {
+  const r = run(['show', 'mcp-gamma', '--file', sample]);
+  assert.equal(r.status, 0, r.stderr || r.stdout);
+  assert.ok(r.stdout.includes("GAMMA_TOKEN: !!js require('fs')"),
+    'verbatim: a masked value piped back into `edit` would silently corrupt the entry');
+  assert.ok(!r.stdout.includes('config:'), 'the subtree only, not the config: line');
+});
+
+test('show --masked and --json', () => {
+  const masked = run(['show', 'mcp-gamma', '--masked', '--file', sample]);
+  assert.equal(masked.status, 0, masked.stderr || masked.stdout);
+  assert.ok(masked.stdout.includes('GAMMA_TOKEN: !!js «0»'));
+  assert.ok(!masked.stdout.includes('readFileSync'));
+  const j = JSON.parse(run(['show', 'mcp-gamma', '--json', '--file', sample]).stdout);
+  assert.equal(j.id, 'mcp-gamma');
+  assert.equal(j.kind, 'block');
+  assert.equal(j.indent, 4);
+});
+
+test('show fails for an unknown id', () => {
+  const r = run(['show', 'nope', '--file', sample]);
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /entry not found: nope/);
+});
+
+test('edit dry-runs and only writes with --yes', () => {
+  const copy = path.join(dir, 'tmp-edit-work.yml');
+  const cfg = path.join(dir, 'tmp-edit-config.yml');
+  fs.copyFileSync(sample, copy);
+  fs.writeFileSync(cfg, 'serverName: gamma\ntransport: stdio\ncommand: node\ntoolCallTimeoutMs: 90000\n');
+  try {
+    const dry = run(['edit', 'mcp-gamma', '--config', cfg, '--file', copy]);
+    assert.equal(dry.status, 0, dry.stderr || dry.stdout);
+    assert.ok(dry.stdout.includes('DRY RUN'));
+    assert.ok(!fs.readFileSync(copy, 'utf8').includes('toolCallTimeoutMs'));
+
+    const wet = run(['edit', 'mcp-gamma', '--config', cfg, '--yes', '--file', copy]);
+    assert.equal(wet.status, 0, wet.stderr || wet.stdout);
+    assert.match(wet.stdout, /updated mcp-gamma/);
+    const text = fs.readFileSync(copy, 'utf8');
+    assert.ok(text.includes('toolCallTimeoutMs: 90000'));
+    assert.ok(text.includes('mcp-alpha') && text.includes('mcp-beta'), 'siblings untouched');
+  } finally {
+    fs.rmSync(copy, { force: true });
+    fs.rmSync(cfg, { force: true });
+  }
+});
+
+test('edit refuses a hardcoded secret and an unknown id', () => {
+  const copy = path.join(dir, 'tmp-edit-secret.yml');
+  const cfg = path.join(dir, 'tmp-edit-secret-config.yml');
+  fs.copyFileSync(sample, copy);
+  fs.writeFileSync(cfg, 'serverName: gamma\ntransport: streamable-http\nurl: https://x/mcp\nheaders:\n  Authorization: Bearer abc\n');
+  try {
+    const r = run(['edit', 'mcp-gamma', '--config', cfg, '--yes', '--file', copy]);
+    assert.equal(r.status, 1);
+    assert.match(r.stderr + r.stdout, /FAIL hardcoded_secret/);
+    assert.equal(fs.readFileSync(copy, 'utf8'), fs.readFileSync(sample, 'utf8'), 'the live file is untouched');
+
+    const missing = run(['edit', 'nope', '--config', cfg, '--file', copy]);
+    assert.equal(missing.status, 1);
+  } finally {
+    fs.rmSync(copy, { force: true });
+    fs.rmSync(cfg, { force: true });
+  }
+});

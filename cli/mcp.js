@@ -1,20 +1,24 @@
 #!/usr/bin/env node
 // dsh-mcp CLI: manage MCP servers registered in a DSH cordis.patch.yml.
-// Usage: node cli/mcp.js <list|probe|add|remove|enable|disable|credential|validate|schema> [...]
+// Usage: node cli/mcp.js <list|probe|add|show|edit|remove|enable|disable|credential|validate|schema> [...]
 //   --file <path>   operate on this patch file (default: $DSH_HOME/cordis.patch.yml or ~/.dsh/cordis.patch.yml)
-//   --json          machine-readable output (list)
-//   --yes           skip confirmation (add/remove/enable/disable)
+//   --json          machine-readable output (list, show)
+//   --yes           skip confirmation (add, edit, remove, enable, disable)
 //   --timeout <s>   probe timeout in seconds (default 60)
 //   --id <id>       probe a single entry
+//   --config <path> edit: read the new config subtree from this file (default: stdin)
+//   --masked        show: replace !!js expressions with placeholders
 // Exit codes: 0 ok, 1 failure, 2 usage error.
+import fs from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
-import { parseTopBlocks, findRow } from '../lib/surgery.js';
+import { parseTopBlocks, findRow, readConfigBlock } from '../lib/surgery.js';
 import { validateEntry, SERVER_NAME_RE } from '../lib/rules.js';
 import { isMcpClientRow, maskEntry } from '../lib/rows.js';
 import { loadPatchStructured } from '../lib/dump.js';
 import { probeConfig } from '../lib/probe.js';
 import { defaultPatchPath, renderEntryRow, applySurgery, applySurgeryAsync } from '../lib/patchfile.js';
+import { prepareUpdate, applyUpdate, toPanelView } from '../lib/update.js';
 import { resolveInput } from '../lib/resolve.js';
 
 function usage() {
@@ -22,6 +26,8 @@ function usage() {
   list [--json]                        list mcp-client entries (masked)
   probe [--id <id>] [--timeout <s>]    real handshake against each/one entry
   add <input> [--yes]                  resolve npm/github/url/json input into an entry
+  show <id> [--json] [--masked]        print one entry's config subtree (verbatim by default)
+  edit <id> [--config <file>] [--yes]  replace the subtree from a file or stdin (dry-run without --yes)
   remove <id> [--yes]                  remove an entry
   enable <id> [--yes] / disable <id> [--yes]
   credential <id> get|set <value>      rotate the credential file referenced by !!js
@@ -41,6 +47,8 @@ for (let i = 0; i < argv.length; i++) {
   else if (argv[i] === '--yes') flags.yes = true;
   else if (argv[i] === '--timeout') flags.timeout = Number(argv[++i]);
   else if (argv[i] === '--id') flags.id = argv[++i];
+  else if (argv[i] === '--config') flags.config = argv[++i];
+  else if (argv[i] === '--masked') flags.masked = true;
   else if (argv[i] === '--no-probe') flags.noProbe = true;
   else rest.push(argv[i]);
 }
@@ -122,6 +130,45 @@ switch (cmd) {
     const pr = await probeConfig(entry.config, { timeoutMs: (flags.timeout ?? 60) * 1000 });
     console.log(pr.ok ? `probe OK: ${pr.toolCount} tools` : `probe FAIL: ${pr.error}`);
     process.exit(pr.ok ? 0 : 1);
+    break;
+  }
+  case 'show': {
+    const id = rest[0];
+    if (!id) usage();
+    const text = fs.readFileSync(FILE, 'utf8');
+    const block = readConfigBlock(text, id);
+    if (!block) { console.error(`entry not found: ${id}`); process.exit(1); }
+    // Verbatim by default: a masked value piped back into `edit` would silently
+    // corrupt the entry, so masking is opt-in and never the round-trip default.
+    const configText = flags.masked ? toPanelView(block.configText).configText : block.configText;
+    if (flags.json) console.log(JSON.stringify({ id, kind: block.kind, indent: block.indent, config: configText }));
+    else console.log(configText);
+    break;
+  }
+  case 'edit': {
+    const id = rest[0];
+    if (!id) usage();
+    const fragment = flags.config ? fs.readFileSync(flags.config, 'utf8') : fs.readFileSync(0, 'utf8');
+    let prep;
+    try {
+      // The CLI is a trusted local surface, like the agent tool: raw !!js text
+      // is allowed here, exactly as if the patch file were edited by hand.
+      prep = await prepareUpdate({ file: FILE, id, fragment, allowJsExpr: true });
+    } catch (e) {
+      console.error(String(e.message || e));
+      process.exit(1);
+    }
+    if (!prep.ok) { console.error(`FAIL ${prep.code}:\n${prep.errors.join('\n')}`); process.exit(1); }
+    if (prep.introducedJsExpr > 0) console.error(`note: this change adds ${prep.introducedJsExpr} new !!js expression(s) — the harness Loader evaluates them at runtime`);
+    for (const w of prep.warnings) console.error(`warn: ${w}`);
+    if (!flags.yes) {
+      console.log('--- DRY RUN, nothing written ---');
+      console.log(prep.normalized);
+      console.log('--yes writes this change.');
+      break;
+    }
+    const r = await applyUpdate({ file: FILE, id, fragment, allowJsExpr: true });
+    console.log(`updated ${id} (backup: ${r.backupPath})`);
     break;
   }
   case 'remove': {
