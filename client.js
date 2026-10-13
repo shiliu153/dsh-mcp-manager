@@ -78,6 +78,35 @@ window.__ModuleLoader__.load({
       return server.live ? 'connected' : 'enabledOffline';
     }
 
+    // State -> dictionary key. The component used to inline this object, which
+    // made an unmapped state render as an undefined label; a named fallback is
+    // the difference between a wrong word and no word at all.
+    const BADGE_KEYS = {
+      connected: 'badgeConnected',
+      enabledOffline: 'badgeEnabledOffline',
+      disabled: 'badgeDisabled',
+      unknown: 'badgeUnknown',
+    };
+
+    function badgeKey(state) {
+      return BADGE_KEYS[state] ?? BADGE_KEYS.unknown;
+    }
+
+    // State -> the host StateDot primitive's own vocabulary. `unknown` is the
+    // only one that is not a solid dot: appearance 'step' renders the
+    // primitive's hollow ring, which says "this reading is unavailable" rather
+    // than claiming a fourth colour.
+    const DOT_PROPS = {
+      connected: { state: 'done' },
+      enabledOffline: { state: 'warning' },
+      disabled: { state: 'idle' },
+      unknown: { state: 'idle', appearance: 'step' },
+    };
+
+    function dotProps(state) {
+      return DOT_PROPS[state] ?? DOT_PROPS.unknown;
+    }
+
     function commandLine(server) {
       if (server.url) return server.url;
       return [server.command, ...(server.args ?? [])].filter(Boolean).join(' ');
@@ -357,7 +386,7 @@ window.__ModuleLoader__.load({
           inject: () => ({ t }),
         }, Panel));
       },
-      __test: { NS, BUNDLE_NAME, API, isOurs, badgeState, commandLine, probeText, errorMessage, ZH, EN },
+      __test: { NS, BUNDLE_NAME, API, isOurs, badgeState, badgeKey, dotProps, commandLine, probeText, errorMessage, ZH, EN },
     };
   },
 });

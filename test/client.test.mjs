@@ -90,6 +90,32 @@ test('badgeState covers all eight fact combinations', () => {
   assert.equal(badgeState({ disabled: false, live: false }, false), 'unknown');
 });
 
+test('badgeKey maps every state to a dictionary key and falls back to unknown', () => {
+  const { __test } = loadModule().factory(requireStub);
+  const { badgeKey } = __test;
+  assert.equal(badgeKey('connected'), 'badgeConnected');
+  assert.equal(badgeKey('enabledOffline'), 'badgeEnabledOffline');
+  assert.equal(badgeKey('disabled'), 'badgeDisabled');
+  assert.equal(badgeKey('unknown'), 'badgeUnknown');
+  assert.equal(badgeKey('nonsense'), 'badgeUnknown', 'an unmapped state must not render an undefined label');
+  assert.equal(badgeKey(undefined), 'badgeUnknown');
+});
+
+test('dotProps maps every state to a StateDot state, with a hollow ring for unknown', () => {
+  const { __test } = loadModule().factory(requireStub);
+  const { dotProps } = __test;
+  // Spread into host-realm objects: the module's own objects carry the vm
+  // realm's prototype, which deepStrictEqual rejects even when the contents
+  // match (same reason the inject face is spread above).
+  assert.deepEqual({ ...dotProps('connected') }, { state: 'done' });
+  assert.deepEqual({ ...dotProps('enabledOffline') }, { state: 'warning' });
+  assert.deepEqual({ ...dotProps('disabled') }, { state: 'idle' });
+  // unknown keeps the idle colour but switches to the primitive's hollow step
+  // ring, so "the registry is unreadable" never looks like "disabled".
+  assert.deepEqual({ ...dotProps('unknown') }, { state: 'idle', appearance: 'step' });
+  assert.deepEqual({ ...dotProps('nonsense') }, { state: 'idle', appearance: 'step' });
+});
+
 test('commandLine prefers url and joins command with args', () => {
   const { __test } = loadModule().factory(requireStub);
   assert.equal(__test.commandLine({ command: 'npx', args: ['-y', 'pkg'] }), 'npx -y pkg');
