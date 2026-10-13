@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { toCandidate, pinnedVersionOf, compareVersions, findInstalled, driftOf, rankByRelevance } from '../lib/market.js';
+import { toCandidate, pinnedVersionOf, compareVersions, findInstalled, driftOf, rankByRelevance, candidateForRegistry } from '../lib/market.js';
 
 const npmEntry = (identifier, version) => ({ registryType: 'npm', identifier, version, transport: { type: 'stdio' } });
 const candidateFor = (identifier, version, over = {}) =>
@@ -108,4 +108,29 @@ test('rankByRelevance lifts description hits above name-only noise', () => {
 test('rankByRelevance keeps the registry order for an empty query', () => {
   const rows = [{ title: 'a' }, { title: 'b' }];
   assert.deepEqual(rankByRelevance(rows, ''), rows);
+});
+
+// The installed row is itself in the list of registered serverNames, so a naive
+// dedup suffixes the very entry we are trying to recognise: the panel stops
+// saying "installed" and offers a second copy under `name-2`.
+test('candidateForRegistry does not suffix the name of the entry it already matches', () => {
+  const server = { name: 'ai.ankimcp/anki-mcp-server', version: '0.28.0', packages: [npmEntry('@ankimcp/anki-mcp-server', '0.28.0')] };
+  const installed = [{ id: 'mcp-anki-mcp-server', config: { serverName: 'anki-mcp-server', transport: 'stdio', command: 'npx', args: ['-y', '@ankimcp/anki-mcp-server@0.27.0'] } }];
+  const c = candidateForRegistry(server, installed);
+  assert.equal(c.serverName, 'anki-mcp-server', 'the installed row must not push itself into a -2 suffix');
+  assert.equal(findInstalled(c, installed).id, 'mcp-anki-mcp-server');
+  assert.equal(driftOf(c, findInstalled(c, installed)).state, 'behind');
+});
+
+test('candidateForRegistry still suffixes a genuine name collision', () => {
+  const server = { name: 'ai.other/thing', version: '1.0.0', packages: [npmEntry('other-thing', '1.0.0')] };
+  const installed = [{ id: 'mcp-thing', config: { serverName: 'thing', transport: 'stdio', command: 'npx', args: ['-y', 'a-thing'] } }];
+  assert.equal(candidateForRegistry(server, installed).serverName, 'thing-2');
+});
+
+test('candidateForRegistry returns an uninstallable entry unchanged', () => {
+  const sse = { name: 'ai.x/sse', version: '1.0.0', remotes: [{ type: 'sse', url: 'https://x/sse' }] };
+  const c = candidateForRegistry(sse, []);
+  assert.equal(c.ok, false);
+  assert.match(c.reason, /sse/);
 });

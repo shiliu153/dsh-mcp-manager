@@ -321,3 +321,178 @@ test('POST /add refuses a duplicate serverName and leaves the file alone', async
   fs.rmSync(file + '.candidate', { force: true });
   fs.rmSync(file, { force: true });
 });
+
+// ---- market routes -----------------------------------------------------------
+
+const REGISTRY_ENTRY = {
+  server: {
+    name: 'ai.ankimcp/anki-mcp-server',
+    title: 'Anki MCP Server',
+    description: 'MCP server for Anki flashcards.',
+    version: '0.27.0',
+    repository: { url: 'https://github.com/ankimcp/anki-mcp-server', source: 'github' },
+    packages: [{ registryType: 'npm', identifier: '@ankimcp/anki-mcp-server', version: '0.27.0', transport: { type: 'stdio' } }],
+  },
+  _meta: { 'io.modelcontextprotocol.registry/official': { status: 'active', publishedAt: 'P', updatedAt: 'U', isLatest: true } },
+};
+
+const stubSearch = (servers, extra = {}) => async () => ({ servers, nextCursor: undefined, fetchedAt: 0, fromCache: false, ...extra });
+const stubGet = (server, extra = {}) => async () => ({ server, fromCache: false, ...extra });
+
+const marketRoutes = (patchPath, opts = {}) => createRoutes(fakeCtx(), { patchPath, probe: stubProbe, ...opts });
+// `get()` above cannot carry a query string, so the market GET needs its own.
+const marketGet = (routes, qs) => routeFor(routes, 'GET', '/market')
+  .fetch(new Request(`http://127.0.0.1/api/dsh-mcp-manager/market${qs ? '?' + qs : ''}`));
+const dropFixture = (file) => {
+  fs.rmSync(file + '.candidate', { force: true });
+  fs.rmSync(file + '.bak', { force: true });
+  fs.rmSync(file, { force: true });
+};
+
+test('GET /market returns ranked, installable results', async () => {
+  const file = copyFixture();
+  try {
+    const res = await marketGet(marketRoutes(file, { search: stubSearch([REGISTRY_ENTRY]) }), 'q=anki');
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.equal(body.results.length, 1);
+    assert.equal(body.results[0].registryName, 'ai.ankimcp/anki-mcp-server');
+    assert.equal(body.results[0].commandLine, 'npx -y @ankimcp/anki-mcp-server@0.27.0');
+    assert.equal(body.results[0].installed, false);
+    assert.deepEqual(body.results[0].gaps, []);
+  } finally { dropFixture(file); }
+});
+
+test('GET /market filters out entries this plugin cannot install', async () => {
+  const file = copyFixture();
+  try {
+    const sse = { server: { name: 'ai.x/sse', version: '1.0.0', description: 'd', remotes: [{ type: 'sse', url: 'https://x/sse' }] }, _meta: {} };
+    const body = await (await marketGet(marketRoutes(file, { search: stubSearch([sse, REGISTRY_ENTRY]) }), 'q=x')).json();
+    assert.deepEqual(body.results.map((r) => r.registryName), ['ai.ankimcp/anki-mcp-server']);
+  } finally { dropFixture(file); }
+});
+
+test('GET /market degrades to an empty list when the registry is unreachable', async () => {
+  const file = copyFixture();
+  try {
+    const res = await marketGet(marketRoutes(file, { search: stubSearch([], { degraded: 'HTTP 503' }) }), 'q=x');
+    assert.equal(res.status, 200, 'a dead registry must not fail the panel');
+    const body = await res.json();
+    assert.equal(body.degraded, 'HTTP 503');
+    assert.deepEqual(body.results, []);
+  } finally { dropFixture(file); }
+});
+
+test('GET /market marks an already-installed server and its drift', async () => {
+  const file = copyFixture();
+  try {
+    // The fixture has mcp-alpha (serverName alpha); append a pinned anki row.
+    fs.writeFileSync(file, fs.readFileSync(file, 'utf8') + `
+- insert:
+    - id: mcp-anki-mcp-server
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: anki-mcp-server
+        transport: stdio
+        command: npx
+        args: ['-y', '@ankimcp/anki-mcp-server@0.26.0']
+`);
+    const body = await (await marketGet(marketRoutes(file, { search: stubSearch([REGISTRY_ENTRY]) }), 'q=anki')).json();
+    assert.equal(body.results[0].installed, true);
+    assert.equal(body.results[0].installedId, 'mcp-anki-mcp-server');
+    assert.equal(body.results[0].drift.state, 'behind');
+  } finally { dropFixture(file); }
+});
+
+test('GET /market?name= returns one candidate, or 404', async () => {
+  const file = copyFixture();
+  try {
+    const ok = await (await marketGet(marketRoutes(file, { get: stubGet(REGISTRY_ENTRY.server) }), 'name=ai.ankimcp%2Fanki-mcp-server')).json();
+    assert.equal(ok.candidate.serverName, 'anki-mcp-server');
+
+    const missing = marketRoutes(file, { get: stubGet(undefined, { error: 'HTTP 404' }) });
+    assert.equal((await marketGet(missing, 'name=nope')).status, 404);
+  } finally { dropFixture(file); }
+});
+
+test('POST /market/install dry-runs without touching the file', async () => {
+  const file = copyFixture();
+  try {
+    const before = fs.readFileSync(file, 'utf8');
+    const routes = marketRoutes(file, { get: stubGet(REGISTRY_ENTRY.server) });
+    const body = await (await post(routeFor(routes, 'POST', '/market/install'), { name: 'ai.ankimcp/anki-mcp-server' })).json();
+    assert.equal(body.written, false);
+    assert.match(body.preview, /anki-mcp-server@0\.27\.0/);
+    assert.equal(body.provenance.publisher, 'ai.ankimcp');
+    assert.equal(fs.readFileSync(file, 'utf8'), before, 'dry run must not write');
+  } finally { dropFixture(file); }
+});
+
+test('POST /market/install writes through the guarded pipeline and probes', async () => {
+  const file = copyFixture();
+  try {
+    const seen = [];
+    const routes = marketRoutes(file, {
+      get: stubGet(REGISTRY_ENTRY.server),
+      probe: async (config) => { seen.push(config); return { ok: true, toolCount: 7 }; },
+    });
+    const body = await (await post(routeFor(routes, 'POST', '/market/install'), { name: 'ai.ankimcp/anki-mcp-server', confirm: true })).json();
+    assert.equal(body.written, true);
+    assert.equal(body.probe.toolCount, 7);
+    assert.equal(seen.length, 1);
+    assert.equal(seen[0].serverName, 'anki-mcp-server', 'the probe sees the persisted config');
+    assert.match(fs.readFileSync(file, 'utf8'), /anki-mcp-server@0\.27\.0/);
+  } finally { dropFixture(file); }
+});
+
+test('POST /market/install suffixes a genuine name collision instead of clobbering', async () => {
+  const file = copyFixture();
+  try {
+    // The fixture already has mcp-alpha (serverName alpha), which is a DIFFERENT
+    // server, so the market must not reuse the name.
+    const dup = { ...REGISTRY_ENTRY, server: { ...REGISTRY_ENTRY.server, name: 'ai.x/alpha' } };
+    const routes = marketRoutes(file, { get: stubGet(dup.server) });
+    const body = await (await post(routeFor(routes, 'POST', '/market/install'), { name: 'ai.x/alpha', confirm: true })).json();
+    assert.equal(body.written, true);
+    assert.match(body.preview, /serverName: alpha-2/);
+    const text = fs.readFileSync(file, 'utf8');
+    assert.match(text, /serverName: alpha\n/, 'the original alpha row survives untouched');
+    assert.match(text, /serverName: alpha-2/);
+  } finally { dropFixture(file); }
+});
+
+test('POST /market/install refuses to add the same server twice', async () => {
+  const file = copyFixture();
+  try {
+    const routes = marketRoutes(file, { get: stubGet(REGISTRY_ENTRY.server) });
+    const first = await post(routeFor(routes, 'POST', '/market/install'), { name: 'ai.ankimcp/anki-mcp-server', confirm: true });
+    assert.equal(first.status, 200);
+    const afterFirst = fs.readFileSync(file, 'utf8');
+
+    // Now it IS installed, so candidateForRegistry keeps its name and the
+    // existing duplicate-serverName gate has to catch the second attempt.
+    const second = await post(routeFor(routes, 'POST', '/market/install'), { name: 'ai.ankimcp/anki-mcp-server', confirm: true });
+    assert.equal(second.status, 400);
+    assert.match((await second.json()).error.message, /duplicate serverName: anki-mcp-server/);
+    assert.equal(fs.readFileSync(file, 'utf8'), afterFirst, 'the live file is untouched');
+  } finally { dropFixture(file); }
+});
+
+test('POST /market/install reports a not-installable entry as 400', async () => {
+  const file = copyFixture();
+  try {
+    const sse = { name: 'ai.x/sse', version: '1.0.0', description: 'd', remotes: [{ type: 'sse', url: 'https://x/sse' }] };
+    const routes = marketRoutes(file, { get: stubGet(sse) });
+    const res = await post(routeFor(routes, 'POST', '/market/install'), { name: 'ai.x/sse' });
+    assert.equal(res.status, 400);
+    assert.equal((await res.json()).error.code, 'not_installable');
+  } finally { dropFixture(file); }
+});
+
+test('POST /market/install requires a name', async () => {
+  const file = copyFixture();
+  try {
+    const routes = marketRoutes(file, { get: stubGet(REGISTRY_ENTRY.server) });
+    assert.equal((await post(routeFor(routes, 'POST', '/market/install'), {})).status, 400);
+  } finally { dropFixture(file); }
+});
