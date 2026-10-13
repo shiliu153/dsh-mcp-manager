@@ -82,3 +82,36 @@ test('renderEntryRow keeps !!js lines verbatim and sorts config keys', () => {
   const keys = row.configLines.filter(l => /^ {4}\w/.test(l)).map(l => l.trim().split(':')[0]);
   assert.deepEqual(keys, [...keys].sort());
 });
+
+test('renderEntryRow quotes values that are unsafe as YAML plain scalars', () => {
+  const row = renderEntryRow({
+    id: 'x', name: 'n',
+    config: {
+      serverName: 'x', transport: 'stdio', command: 'npx',
+      args: ['@scope/pkg', 'plain', 'true', '123', 'with space', '#hash', '~', '-y'],
+    },
+  });
+  const text = row.configLines.join('\n');
+  assert.ok(text.includes('    - "@scope/pkg"'), text);
+  assert.ok(text.includes('    - plain'), text);
+  assert.ok(text.includes('    - "true"'), text);
+  assert.ok(text.includes('    - "123"'), text);
+  assert.ok(text.includes('    - "with space"'), text);
+  assert.ok(text.includes('    - "#hash"'), text);
+  assert.ok(text.includes('    - "~"'), text);
+  assert.ok(text.includes('    - -y'), '-y stays a legal plain scalar');
+});
+
+test('an appended row carrying a scoped package survives the validation gate', async () => {
+  const file = tmpPatch(SAMPLE);
+  const row = renderEntryRow({
+    id: 'mcp-everything', name: '@deepseek-ai/dsh-mcp-client',
+    config: {
+      serverName: 'everything', transport: 'stdio', command: 'npx',
+      args: ['-y', '@modelcontextprotocol/server-everything'],
+    },
+  });
+  const r = await applySurgeryAsync({ file, operation: { type: 'appendEntry', row } });
+  assert.equal(r.applied, true);
+  assert.match(fs.readFileSync(file, 'utf8'), /@modelcontextprotocol\/server-everything/);
+});
