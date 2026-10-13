@@ -22,10 +22,37 @@ function loadModule() {
 }
 
 const reactStub = { createElement: (type, props, ...children) => ({ type, props, children }) };
-const requireStub = (id) => {
-  if (id === 'react') return reactStub;
-  throw new Error(`unexpected require: ${id}`);
-};
+
+// Stand-ins for the two host primitives the panel uses. Each call is recorded
+// so a test can assert on the props the panel passed, not just on the tree
+// shape: the primitive's own appearance is the thing under test here.
+function primitivesStub(log) {
+  return {
+    StateDot: (props) => {
+      log.push({ kind: 'StateDot', props });
+      return { type: 'StateDot', props, children: [] };
+    },
+    Tooltip: (props) => {
+      log.push({ kind: 'Tooltip', props });
+      return { type: 'Tooltip', props, children: props.children };
+    },
+  };
+}
+
+// `primitives === 'throw'` reproduces a host that does not seed
+// @deepseek-ai/dsh-client-ui-primitives, which is the degraded path.
+function makeRequire(react, primitives) {
+  return (id) => {
+    if (id === 'react') return react;
+    if (id === '@deepseek-ai/dsh-client-ui-primitives') {
+      if (primitives === 'throw') throw new Error('primitives unavailable');
+      return primitives;
+    }
+    throw new Error(`unexpected require: ${id}`);
+  };
+}
+
+const requireStub = makeRequire(reactStub, primitivesStub([]));
 
 test('module id and inject face are correct', () => {
   const mod = loadModule();
@@ -169,12 +196,12 @@ function textOf(node, out = []) {
   return out;
 }
 
-function renderPanel(react, subject) {
-  return textOf(renderPanelNode(react, subject)).join(' | ');
+function renderPanel(react, subject, primitives) {
+  return textOf(renderPanelNode(react, subject, primitives)).join(' | ');
 }
 
-function renderPanelNode(react, subject) {
-  const api = loadModule().factory((id) => (id === 'react' ? react : requireStub(id)));
+function renderPanelNode(react, subject, primitives = primitivesStub([])) {
+  const api = loadModule().factory(makeRequire(react, primitives));
   const registered = [];
   api.apply({
     effect: (fn) => { fn(); },
@@ -206,6 +233,18 @@ function findByClass(node, className) {
   return node.children ? findByClass(node.children, className) : undefined;
 }
 
+/** Find the first element carrying a given prop value. */
+function findByProp(node, key, value) {
+  if (node === null || node === undefined || typeof node === 'boolean') return undefined;
+  if (typeof node === 'string' || typeof node === 'number') return undefined;
+  if (Array.isArray(node)) {
+    for (const n of node) { const hit = findByProp(n, key, value); if (hit) return hit; }
+    return undefined;
+  }
+  if (node.props?.[key] === value) return node;
+  return node.children ? findByProp(node.children, key, value) : undefined;
+}
+
 // Every custom property client.js references must exist in the host theme. The
 // set below was read out of the installed dsh-client-ui-theme bundle. An
 // invented name is not an error anywhere: the declaration is simply invalid at
@@ -223,6 +262,12 @@ const HOST_TOKENS = new Set([
   '--dsw-alias-switch-thumb',
   '--dsw-alias-interactive-bg-hover',
   '--dsw-alias-state-business-primary',
+  // The status dot's own colours. The primitive carries them in normal
+  // operation, but the degraded dot below paints with the same vocabulary.
+  '--dsw-alias-state-success-primary',
+  '--dsw-alias-state-warn-primary',
+  '--dsw-alias-state-idle-primary',
+  '--dsw-alias-label-tertiary',
   '--dsw-focus-ring-width',
   '--dsw-focus-ring-color',
 ]);
@@ -266,14 +311,14 @@ test('a disabled server renders the switch unchecked', () => {
 
 test('the panel renders the classes its stylesheet targets', () => {
   const names = classNamesOf(renderPanelNode(hookReact(READY_ONE), OURS));
-  for (const cls of ['dsh-mcp', 'dsh-mcp-row', 'dsh-mcp-badge', 'dsh-mcp-switch', 'dsh-mcp-thumb', 'dsh-mcp-add']) {
+  for (const cls of ['dsh-mcp', 'dsh-mcp-row', 'dsh-mcp-dot-anchor', 'dsh-mcp-switch', 'dsh-mcp-thumb', 'dsh-mcp-add']) {
     assert.ok(names.includes(cls), `missing ${cls}`);
   }
 });
 
 const OURS = { kind: 'bundle', pkg: { name: '@dsh-contrib/dsh-mcp-manager' } };
 
-test('the ready path renders rows, targets and badges', () => {
+test('the ready path renders rows and targets', () => {
   const react = hookReact([
     { status: 'ready', data: { patch: '/tmp/p.yml', resourcesAvailable: true, servers: [
       { id: 'mcp-a', serverName: 'alpha', transport: 'stdio', command: 'npx', args: ['-y', 'x'], url: '', disabled: false, live: true },
@@ -284,30 +329,77 @@ test('the ready path renders rows, targets and badges', () => {
   const text = renderPanel(react, OURS);
   assert.match(text, /mcp-a/);
   assert.match(text, /npx -y x/);
-  assert.match(text, /badgeConnected/);
   assert.match(text, /mcp-b/);
-  assert.match(text, /badgeDisabled/);
   assert.match(text, /\/tmp\/p\.yml/);
 });
 
-test('an enabled but unregistered server renders the blind-spot badge', () => {
+test('each row renders a status dot whose state follows the server facts', () => {
+  const log = [];
   const react = hookReact([
     { status: 'ready', data: { patch: '/p', resourcesAvailable: true, servers: [
-      { id: 'mcp-c', serverName: 'gamma', transport: 'stdio', command: 'node', args: [], url: '', disabled: false, live: false },
+      { id: 'mcp-a', serverName: 'alpha', transport: 'stdio', command: 'npx', args: ['-y', 'x'], url: '', disabled: false, live: true },
+      { id: 'mcp-b', serverName: 'beta', transport: 'stdio', command: 'node', args: [], url: '', disabled: false, live: false },
+      { id: 'mcp-c', serverName: 'gamma', transport: 'stdio', command: 'node', args: [], url: '', disabled: true, live: false },
     ] } },
     {}, {}, '', '', null, '',
   ]);
-  assert.match(renderPanel(react, OURS), /badgeEnabledOffline/);
+  renderPanelNode(react, OURS, primitivesStub(log));
+  const dots = log.filter((e) => e.kind === 'StateDot').map((e) => e.props);
+  assert.equal(dots.length, 3);
+  assert.deepEqual(dots.map((p) => p.state), ['done', 'warning', 'idle']);
+  assert.deepEqual(dots.map((p) => p.appearance), [undefined, undefined, undefined],
+    'only the unavailable reading is a hollow ring');
 });
 
-test('a missing resource service renders the unavailable badge', () => {
+test('a server whose live state cannot be read renders the hollow ring', () => {
+  const log = [];
   const react = hookReact([
     { status: 'ready', data: { patch: '/p', resourcesAvailable: false, servers: [
       { id: 'mcp-d', serverName: 'delta', transport: 'stdio', command: 'node', args: [], url: '', disabled: false, live: false },
     ] } },
     {}, {}, '', '', null, '',
   ]);
-  assert.match(renderPanel(react, OURS), /badgeUnknown/);
+  renderPanelNode(react, OURS, primitivesStub(log));
+  const dot = log.find((e) => e.kind === 'StateDot');
+  assert.equal(dot.props.state, 'idle');
+  assert.equal(dot.props.appearance, 'step');
+});
+
+test('the status dot is anchored in the host Tooltip, on a real DOM element', () => {
+  const log = [];
+  const react = hookReact(READY_ONE);
+  const node = renderPanelNode(react, OURS, primitivesStub(log));
+
+  const tooltips = log.filter((e) => e.kind === 'Tooltip');
+  assert.equal(tooltips.length, 1);
+  assert.equal(tooltips[0].props.label, 'badgeConnected');
+  assert.equal(tooltips[0].props.side, 'top');
+
+  // Tooltip positions its bubble from a ref on its child. StateDot is a plain
+  // function component with no forwardRef, so a bare StateDot child would
+  // receive a ref it cannot forward and the bubble would never appear.
+  const anchor = findByClass(node, 'dsh-mcp-dot-anchor');
+  assert.ok(anchor, 'the tooltip anchor must exist');
+  assert.equal(anchor.type, 'span');
+  assert.equal(anchor.props.role, 'img');
+  assert.equal(anchor.props['aria-label'], 'badgeConnected');
+  assert.equal(anchor.props.title, undefined,
+    'a native title beside the host bubble would show two tooltips');
+  assert.ok(anchor.children.some((c) => c?.type === 'StateDot'),
+    'the primitive must stay a child of the anchor');
+});
+
+test('without the host primitives the panel degrades to a self-drawn dot and a native title', () => {
+  const react = hookReact(READY_ONE);
+  const node = renderPanelNode(react, OURS, 'throw');
+
+  const anchor = findByClass(node, 'dsh-mcp-dot-anchor');
+  assert.ok(anchor, 'the row must still render a dot when the primitive is missing');
+  assert.equal(anchor.props.title, 'badgeConnected');
+
+  const dot = findByClass(node, 'dsh-mcp-dot');
+  assert.ok(dot, 'the fallback dot must render');
+  assert.equal(dot.props['data-state'], 'connected');
 });
 
 test('the error path renders the message and a retry control', () => {

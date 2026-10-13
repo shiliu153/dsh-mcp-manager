@@ -13,6 +13,20 @@ window.__ModuleLoader__.load({
     const BUNDLE_NAME = '@dsh-contrib/dsh-mcp-manager';
     const API = '/api/dsh-mcp-manager';
 
+    // The shell seeds a frozen platform module table (react, react-dom, cordis,
+    // client-store, ui-slots, ui-primitives, ui-dockkit) and every dynamic
+    // bundle resolves against exactly that baseline, so this resolves the same
+    // way `require('react')` above does. The guard is insurance, not the normal
+    // path: without it a host that drops the key would throw inside the factory
+    // and take the whole panel down, whereas a missing dot is survivable.
+    let StateDot = null;
+    let Tooltip = null;
+    try {
+      const primitives = require('@deepseek-ai/dsh-client-ui-primitives');
+      StateDot = primitives.StateDot ?? null;
+      Tooltip = primitives.Tooltip ?? null;
+    } catch { /* fall back to the self-drawn dot in StatusDot below */ }
+
     const ZH = {
       title: 'MCP 服务器',
       refresh: '刷新',
@@ -25,6 +39,8 @@ window.__ModuleLoader__.load({
       badgeUnknown: '连接状态不可用',
       probe: '探测',
       probing: '探测中…',
+      probeAll: '一键探测',
+      probeAllLabel: '探测全部 {count} 个服务器',
       remove: '删除',
       removeConfirm: '确认删除？',
       cancel: '取消',
@@ -51,6 +67,8 @@ window.__ModuleLoader__.load({
       badgeUnknown: 'Connection state unavailable',
       probe: 'Probe',
       probing: 'Probing…',
+      probeAll: 'Probe all',
+      probeAllLabel: 'Probe all {count} servers',
       remove: 'Delete',
       removeConfirm: 'Delete?',
       cancel: 'Cancel',
@@ -129,6 +147,32 @@ window.__ModuleLoader__.load({
       return isOurs(props.subject) ? h(PanelBody, props) : null;
     }
 
+    /**
+     * The per-row connection state, as a dot.
+     *
+     * The host primitive carries the look; the anchor span exists because
+     * Tooltip clones its child with a ref, and StateDot cannot forward one.
+     * The anchor also owns the accessible name: StateDot is aria-hidden by
+     * design ("pair with text for accessibility"), and Tooltip only injects
+     * aria-describedby when openOnClick is on, which it is not here.
+     */
+    function StatusDot(props) {
+      const dot = dotProps(props.state);
+      const anchorProps = {
+        className: 'dsh-mcp-dot-anchor',
+        role: 'img',
+        'aria-label': props.label,
+      };
+      const inner = StateDot
+        ? h(StateDot, { state: dot.state, appearance: dot.appearance })
+        : h('span', { className: 'dsh-mcp-dot', 'data-state': props.state });
+
+      // Degraded: no host bubble, so the native one has to carry the text.
+      // Never both - two tooltips for one dot is worse than either alone.
+      if (!Tooltip) return h('span', { ...anchorProps, title: props.label }, inner);
+      return h(Tooltip, { label: props.label, side: 'top' }, h('span', anchorProps, inner));
+    }
+
     // Colours are theme tokens only. Every token below was checked against the
     // host theme's own vocabulary (--dsw-alias-label-*, --dsw-alias-border-l*,
     // --dsw-alias-brand-primary, ...). An invented name makes the declaration
@@ -146,8 +190,18 @@ window.__ModuleLoader__.load({
 .dsh-mcp-meta { font-size: 12px; color: var(--dsw-alias-label-secondary); }
 .dsh-mcp-target { font-family: ui-monospace, Consolas, monospace; font-size: 12px; color: var(--dsw-alias-label-caption); word-break: break-all; }
 .dsh-mcp-actions { display: flex; align-items: center; gap: 8px; margin-left: auto; }
-.dsh-mcp-badge { font-size: 12px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--dsw-alias-border-l2); color: var(--dsw-alias-label-secondary); }
-.dsh-mcp-badge[data-state="connected"] { color: var(--dsw-alias-label-primary); border-color: var(--dsw-alias-border-l3); }
+/* The host Tooltip positions its bubble from a ref on this element, so the dot
+ * must stay a child rather than the anchor itself: StateDot is a plain function
+ * component and cannot take a ref. */
+.dsh-mcp-dot-anchor { display: inline-flex; align-items: center; flex: 0 0 auto; }
+/* Degraded dot, used only when the host's ui-primitives module cannot be
+ * resolved. Sizes and colours mirror StateDot.module.css on purpose: the
+ * fallback must not read as a different design. */
+.dsh-mcp-dot { box-sizing: border-box; display: inline-block; width: 10px; height: 10px; border-radius: 50%; corner-shape: round; background: currentColor; color: var(--dsw-alias-state-idle-primary); }
+.dsh-mcp-dot[data-state="connected"] { color: var(--dsw-alias-state-success-primary); }
+.dsh-mcp-dot[data-state="enabledOffline"] { color: var(--dsw-alias-state-warn-primary); }
+.dsh-mcp-dot[data-state="disabled"] { color: var(--dsw-alias-state-idle-primary); }
+.dsh-mcp-dot[data-state="unknown"] { background: transparent; border: 1.5px solid var(--dsw-alias-label-tertiary); }
 .dsh-mcp-result { font-size: 12px; color: var(--dsw-alias-label-secondary); }
 .dsh-mcp-button { font-size: 12px; padding: 4px 10px; border-radius: 6px; border: 1px solid var(--dsw-alias-border-l2); background: transparent; color: var(--dsw-alias-label-primary); cursor: pointer; }
 .dsh-mcp-button:hover:not(:disabled) { background: var(--dsw-alias-interactive-bg-hover); }
@@ -296,15 +350,13 @@ window.__ModuleLoader__.load({
         if (servers.length === 0) rows.push(h('div', { key: 'n', className: 'dsh-mcp-meta' }, t('empty')));
         for (const s of servers) {
           const badge = badgeState(s, state.data?.resourcesAvailable === true);
-          const badgeKey = { connected: 'badgeConnected', enabledOffline: 'badgeEnabledOffline',
-            disabled: 'badgeDisabled', unknown: 'badgeUnknown' }[badge];
           const isBusy = Boolean(busy[s.id]);
           rows.push(h('div', { key: s.id, className: 'dsh-mcp-row' },
             h('div', { className: 'dsh-mcp-row-head' },
+              h(StatusDot, { state: badge, label: t(badgeKey(badge)) }),
               h('span', { className: 'dsh-mcp-id' }, s.id),
               h('span', { className: 'dsh-mcp-meta' }, s.serverName),
               h('span', { className: 'dsh-mcp-meta' }, s.transport),
-              h('span', { className: 'dsh-mcp-badge', 'data-state': badge }, t(badgeKey)),
               h('span', { className: 'dsh-mcp-actions' },
                 h('button', {
                   type: 'button', className: 'dsh-mcp-button', disabled: isBusy,

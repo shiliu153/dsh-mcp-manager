@@ -57,10 +57,14 @@ validation with DSH's own loader (`loadOptionalPatches`) → atomic write with a
 With the bundle enabled, the **DSH MCP manager** page under Plugins grows a
 section listing your registered MCP servers:
 
-- one row per server: id, serverName, transport, and the command line or URL;
-- a connection badge — `Connected` / `Enabled · not connected` / `Disabled` —
-  read from the harness's live MCP resource registry at zero cost, so
-  "configured" and "actually connected" are no longer the same thing on screen;
+- one row per server: a status dot, id, serverName, transport, and the command
+  line or URL;
+- a **status dot** where the text badge used to be — green (connected), amber
+  (enabled, not connected), grey (disabled), or a hollow ring when the live
+  registry cannot be read. It is the host's own `StateDot` primitive, read from
+  the harness's MCP resource registry at zero cost, so "configured" and
+  "actually connected" are no longer the same thing on screen. Hovering it
+  shows the state as text in the host's `Tooltip`;
 - **Probe** per row: a real handshake reporting the tool count, or the failure
   reason. Nothing is probed automatically; the list opens instantly;
 - an enable/disable switch, and a delete that asks once inline;
