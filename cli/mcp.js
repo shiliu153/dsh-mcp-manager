@@ -1,13 +1,14 @@
 #!/usr/bin/env node
 // dsh-mcp CLI: manage MCP servers registered in a DSH cordis.patch.yml.
-// Usage: node cli/mcp.js <list|probe|add|show|edit|remove|enable|disable|credential|validate|schema> [...]
+// Usage: node cli/mcp.js <list|probe|search|install|add|show|edit|remove|enable|disable|credential|validate|schema> [...]
 //   --file <path>   operate on this patch file (default: $DSH_HOME/cordis.patch.yml or ~/.dsh/cordis.patch.yml)
-//   --json          machine-readable output (list, show)
-//   --yes           skip confirmation (add, edit, remove, enable, disable)
+//   --json          machine-readable output (list, show, search)
+//   --yes           skip confirmation (add, install, edit, remove, enable, disable)
 //   --timeout <s>   probe timeout in seconds (default 60)
 //   --id <id>       probe a single entry
 //   --config <path> edit: read the new config subtree from this file (default: stdin)
 //   --masked        show: replace !!js expressions with placeholders
+//   --registry-base <url>  search/install: override the MCP registry base URL
 // Exit codes: 0 ok, 1 failure, 2 usage error.
 import fs from 'node:fs';
 import path from 'node:path';
@@ -20,12 +21,17 @@ import { probeConfig } from '../lib/probe.js';
 import { defaultPatchPath, renderEntryRow, applySurgery, applySurgeryAsync, readBackEntry, appendEntryGate } from '../lib/patchfile.js';
 import { prepareUpdate, applyUpdate, toPanelView } from '../lib/update.js';
 import { resolveInput } from '../lib/resolve.js';
+import { searchServers, getServer } from '../lib/registry.js';
+import { toEntry, findInstalled, driftOf, candidateForRegistry, rankByRelevance } from '../lib/market.js';
+import { detectRuntimes } from '../lib/subprocess.js';
 
 function usage() {
   console.error(`usage: mcp.js <command> [args]
   list [--json]                        list mcp-client entries (masked)
   probe [--id <id>] [--timeout <s>]    real handshake against each/one entry
   add <input> [--yes]                  resolve npm/github/url/json input into an entry
+  search <query> [--limit N] [--cursor C]   search the official MCP Registry (names only)
+  install <registry-name> [--yes]      install a registry entry (dry-run without --yes)
   show <id> [--json] [--masked]        print one entry's config subtree (verbatim by default)
   edit <id> [--config <file>] [--yes]  replace the subtree from a file or stdin (dry-run without --yes)
   remove <id> [--yes]                  remove an entry
@@ -33,7 +39,7 @@ function usage() {
   credential <id> get|set <value>      rotate the credential file referenced by !!js
   validate <id>                        validate an existing entry against official rules
   schema                               print the official mcp-client field rules
-common flags: --file <path>, --json, --yes, --timeout <s>`);
+common flags: --file <path>, --json, --yes, --timeout <s>, --registry-base <url>`);
   process.exit(2);
 }
 
@@ -50,11 +56,17 @@ for (let i = 0; i < argv.length; i++) {
   else if (argv[i] === '--config') flags.config = argv[++i];
   else if (argv[i] === '--masked') flags.masked = true;
   else if (argv[i] === '--no-probe') flags.noProbe = true;
+  else if (argv[i] === '--limit') flags.limit = Number(argv[++i]);
+  else if (argv[i] === '--cursor') flags.cursor = argv[++i];
+  else if (argv[i] === '--version') flags.version = argv[++i];
+  else if (argv[i] === '--registry-base') flags.registryBase = argv[++i];
   else rest.push(argv[i]);
 }
 if (!cmd) usage();
 
 const FILE = flags.file ?? defaultPatchPath();
+// undefined -> lib/registry.js falls back to the official registry.
+const REGISTRY_BASE = flags.registryBase ?? undefined;
 
 async function readEntries() {
   try {
@@ -75,6 +87,20 @@ async function readEntries() {
 }
 function nameOf(text, line) { return /^ *name:\s*(.+)$/m.exec(text.split('\n').slice(line, line + 12).join('\n'))?.[1]?.replace(/^['"]|['"],?$/g, '') ?? ''; }
 function disabledOf(text, a, b) { return /disabled:\s*true/.test(text.split('\n').slice(a, b + 1).join('\n')); }
+
+const executionLine = (exec) => (exec.kind === 'stdio'
+  ? [exec.command, ...(exec.args ?? [])].join(' ')
+  : exec.url);
+
+/** Installed rows, plus the market's candidate for one registry entry. */
+async function marketCandidate(name) {
+  const installed = (await readEntries()).filter(isMcpClientRow);
+  const got = await getServer({ name, version: flags.version ?? 'latest', baseUrl: REGISTRY_BASE });
+  if (!got.server) throw new Error(got.error ?? `registry entry not found: ${name}`);
+  const candidate = candidateForRegistry(got.server, installed, detectRuntimes());
+  if (!candidate.ok) throw new Error(`not installable: ${candidate.reason}`);
+  return { candidate, installed };
+}
 
 switch (cmd) {
   case 'list': {
@@ -257,6 +283,111 @@ switch (cmd) {
   env scrubbing:    the harness drops ambient KEY/PASSWORD/SECRET/TOKEN-named and DSH_* vars from
                     its own environment; explicit env entries in config DO reach the stdio child.
 `);
+    break;
+  }
+  case 'search': {
+    const query = rest[0];
+    if (!query) usage();
+    const installed = (await readEntries()).filter(isMcpClientRow);
+    const r = await searchServers({
+      query, limit: flags.limit ?? 20, cursor: flags.cursor, baseUrl: REGISTRY_BASE,
+    });
+    if (r.degraded) { console.error(`registry unreachable: ${r.degraded}`); process.exit(1); }
+    const runtimeProbe = detectRuntimes();
+    // Same local re-rank the panel route does: the registry matches names only,
+    // so `anki` also returns every `banking-*` entry.
+    const rows = rankByRelevance(
+      r.servers
+        .map((raw) => candidateForRegistry(raw?.server ?? raw, installed, runtimeProbe))
+        .filter((c) => c.ok)
+        .map((c) => ({
+          c,
+          registryName: c.provenance.registryName,
+          title: c.provenance.title,
+          description: c.provenance.description,
+        })),
+      query,
+    ).map((x) => x.c);
+    if (flags.json) {
+      console.log(JSON.stringify({
+        nextCursor: r.nextCursor ?? null,
+        results: rows.map((c) => ({
+          registryName: c.provenance.registryName,
+          version: c.provenance.version,
+          publisher: c.provenance.publisher,
+          serverName: c.serverName,
+          transport: c.execution.kind,
+          runs: executionLine(c.execution),
+          gaps: c.gaps,
+          installed: Boolean(findInstalled(c, installed)),
+        })),
+      }, null, 2));
+      break;
+    }
+    if (!rows.length) {
+      console.log(`no installable registry entries matched "${query}" (unsupported transports and package types are filtered out)`);
+      break;
+    }
+    for (const c of rows) {
+      const already = findInstalled(c, installed);
+      const drift = driftOf(c, already);
+      console.log(`${c.provenance.registryName}@${c.provenance.version}  [${c.provenance.publisher}]`);
+      console.log(`  ${c.provenance.title || c.provenance.description}`);
+      console.log(`  serverName: ${c.serverName}`);
+      console.log(`  runs: ${executionLine(c.execution)}`);
+      if (c.execution.runtimePresent === false) console.log('  warn: the runtime for this package is not on PATH');
+      if (c.gaps.length) console.log(`  needs credentials: ${c.gaps.map((g) => g.name).join(', ')}`);
+      if (already) console.log(`  installed as ${already.id}${drift ? ` (${drift.state})` : ''}`);
+      console.log('');
+    }
+    if (r.nextCursor) console.log(`cursor: ${r.nextCursor}`);
+    break;
+  }
+  case 'install': {
+    const name = rest[0];
+    if (!name) usage();
+    let resolved;
+    try {
+      resolved = await marketCandidate(name);
+    } catch (e) {
+      console.error(String(e.message || e));
+      process.exit(1);
+    }
+    const { candidate: c, installed } = resolved;
+    const already = findInstalled(c, installed);
+    const drift = driftOf(c, already);
+    console.log(`registry: ${c.provenance.registryName}@${c.provenance.version} (publisher ${c.provenance.publisher})`);
+    if (c.provenance.repositoryUrl) console.log(`repo:     ${c.provenance.repositoryUrl}`);
+    console.log(`runs:     ${executionLine(c.execution)}`);
+    if (c.execution.runtimePresent === false) console.log('warn: the runtime for this package is not on PATH');
+    for (const g of c.gaps) console.log(`needs ${g.kind}: ${g.name}${g.description ? ` — ${g.description}` : ''}`);
+    if (already) console.log(`note: already registered as ${already.id}${drift ? ` (${drift.state})` : ''}`);
+    const row = renderEntryRow(toEntry(c));
+    console.log('--- entry to be written ---');
+    console.log(renderInsertBlock(row).join('\n'));
+    if (!flags.yes) {
+      console.log('--- dry run: nothing written. Re-run with --yes to write. ---');
+      break;
+    }
+    let r;
+    try {
+      r = await applySurgeryAsync({
+        file: FILE,
+        operation: { type: 'appendEntry', row },
+        preCommit: appendEntryGate({ id: row.id, serverName: c.entryConfig.serverName }),
+      });
+    } catch (e) {
+      console.error(`FAIL ${String(e.message || e)}`);
+      process.exit(1);
+    }
+    console.log(`written (backup: ${r.backupPath})`);
+    if (flags.noProbe) break;
+    const back = await readBackEntry(FILE, row.id);
+    if (!back.ok) { console.error(`verify FAIL: ${back.error}`); process.exit(1); }
+    console.log('probing...');
+    const pr = await probeConfig(back.config, { timeoutMs: (flags.timeout ?? 60) * 1000 });
+    console.log(pr.ok ? `probe OK: ${pr.toolCount} tools` : `probe FAIL: ${pr.error}`);
+    process.exit(pr.ok ? 0 : 1);
     break;
   }
   default:

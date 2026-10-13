@@ -1,9 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { spawnSync, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { startMiniRegistry } from './fixtures/mini-registry.mjs';
 
 const dir = path.dirname(fileURLToPath(import.meta.url));
 const cli = path.join(dir, '../cli/mcp.js');
@@ -181,3 +182,111 @@ test('edit refuses a hardcoded secret and an unknown id', () => {
     fs.rmSync(cfg, { force: true });
   }
 });
+
+// ---- market: search and install ----------------------------------------------
+//
+// The mini registry runs in THIS process, so the CLI must be spawned
+// asynchronously: `run()` above uses spawnSync, which blocks the event loop and
+// would starve the very server the child is trying to reach.
+function runAsync(args, { timeoutMs = 30000 } = {}) {
+  return new Promise((resolve) => {
+    const child = spawn(process.execPath, [cli, ...args], { windowsHide: true });
+    let stdout = '', stderr = '';
+    const timer = setTimeout(() => child.kill(), timeoutMs);
+    child.stdout.on('data', (d) => { stdout += d; });
+    child.stderr.on('data', (d) => { stderr += d; });
+    child.on('close', (status) => { clearTimeout(timer); resolve({ status, stdout, stderr }); });
+    child.on('error', (e) => { clearTimeout(timer); resolve({ status: 1, stdout, stderr: stderr + e.message }); });
+  });
+}
+
+function withRegistry(fn) {
+  return async () => {
+    const server = await startMiniRegistry(0);
+    const base = `http://127.0.0.1:${server.address().port}`;
+    try { await fn(base); } finally { await new Promise((r) => server.close(r)); }
+  };
+}
+
+test('search lists installable hits with their execution surface', withRegistry(async (base) => {
+  const r = await runAsync(['search', 'anki', '--registry-base', base]);
+  assert.equal(r.status, 0, r.stderr || r.stdout);
+  assert.match(r.stdout, /ai\.ankimcp\/anki-mcp-server@0\.27\.0/);
+  assert.match(r.stdout, /npx -y @ankimcp\/anki-mcp-server@0\.27\.0/);
+}));
+
+test('search filters out an entry it cannot install, and says so when nothing is left', withRegistry(async (base) => {
+  const r = await runAsync(['search', 'sse-only', '--registry-base', base]);
+  assert.match(r.stdout + r.stderr, /no installable registry entries/);
+}));
+
+test('search --json is machine-readable', withRegistry(async (base) => {
+  const r = await runAsync(['search', 'anki', '--registry-base', base, '--json']);
+  assert.equal(r.status, 0, r.stderr || r.stdout);
+  const j = JSON.parse(r.stdout);
+  assert.equal(j.results[0].registryName, 'ai.ankimcp/anki-mcp-server');
+  assert.equal(j.results[0].transport, 'stdio');
+  assert.deepEqual(j.results[0].gaps, []);
+}));
+
+test('search names the credentials a hit still needs', withRegistry(async (base) => {
+  const r = await runAsync(['search', 'needs-key', '--registry-base', base]);
+  assert.match(r.stdout, /needs credentials: Authorization/);
+}));
+
+test('search reports an unreachable registry with a non-zero exit', () => {
+  const r = run(['search', 'x', '--registry-base', 'http://127.0.0.1:1']);
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /registry unreachable/);
+});
+
+test('install dry-runs by default and writes nothing', withRegistry(async (base) => {
+  const copy = path.join(dir, 'tmp-market.yml');
+  fs.copyFileSync(sample, copy);
+  try {
+    const before = fs.readFileSync(copy, 'utf8');
+    const r = await runAsync(['install', 'ai.ankimcp/anki-mcp-server', '--registry-base', base, '--file', copy]);
+    assert.equal(r.status, 0, r.stderr || r.stdout);
+    assert.match(r.stdout, /dry run/);
+    assert.match(r.stdout, /anki-mcp-server@0\.27\.0/);
+    assert.equal(fs.readFileSync(copy, 'utf8'), before);
+  } finally { fs.rmSync(copy, { force: true }); fs.rmSync(copy + '.bak', { force: true }); }
+}));
+
+test('install --yes writes a mountable insert row', withRegistry(async (base) => {
+  const copy = path.join(dir, 'tmp-market.yml');
+  fs.copyFileSync(sample, copy);
+  try {
+    const r = await runAsync(['install', 'ai.ankimcp/anki-mcp-server', '--registry-base', base, '--file', copy, '--yes', '--no-probe']);
+    assert.equal(r.status, 0, r.stderr || r.stdout);
+    assert.match(r.stdout, /written/);
+    assert.equal(findRow(fs.readFileSync(copy, 'utf8'), 'mcp-anki-mcp-server').kind, 'insert-row');
+  } finally { fs.rmSync(copy, { force: true }); fs.rmSync(copy + '.bak', { force: true }); }
+}));
+
+test('install names the credentials still to be filled', withRegistry(async (base) => {
+  const copy = path.join(dir, 'tmp-market.yml');
+  fs.copyFileSync(sample, copy);
+  try {
+    const r = await runAsync(['install', 'ai.x/needs-key', '--registry-base', base, '--file', copy]);
+    assert.match(r.stdout, /needs secret: Authorization/);
+  } finally { fs.rmSync(copy, { force: true }); fs.rmSync(copy + '.bak', { force: true }); }
+}));
+
+test('install refuses an entry it cannot run', withRegistry(async (base) => {
+  const r = await runAsync(['install', 'ai.x/sse-only', '--registry-base', base, '--file', sample]);
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /not installable: sse/);
+}));
+
+test('install flags a server that is already registered', withRegistry(async (base) => {
+  const copy = path.join(dir, 'tmp-market.yml');
+  fs.copyFileSync(sample, copy);
+  try {
+    const r = await runAsync(['install', 'ai.ankimcp/anki-mcp-server', '--registry-base', base, '--file', copy, '--yes', '--no-probe']);
+    assert.equal(r.status, 0, r.stderr || r.stdout);
+    const again = await runAsync(['install', 'ai.ankimcp/anki-mcp-server', '--registry-base', base, '--file', copy]);
+    assert.match(again.stdout, /already registered as mcp-anki-mcp-server/);
+    assert.match(again.stdout, /\(current\)/, 'the same pinned version must not be reported as drift');
+  } finally { fs.rmSync(copy, { force: true }); fs.rmSync(copy + '.bak', { force: true }); }
+}));
