@@ -92,7 +92,10 @@ test('prepareUpdate refuses a forged or out-of-range placeholder', async () => {
 
 test('prepareUpdate refuses a new raw expression for the panel but allows it for the CLI', async () => {
   const file = tmpPatch();
-  const fragment = "serverName: gamma\ntransport: stdio\ncommand: node\nenv:\n  GAMMA_TOKEN: !!js require('fs').readFileSync('C:/x/t.txt','utf8').trim()\n  OTHER: !!js process.env.HOME";
+  // The row's own expression, verbatim, plus one that is genuinely new: only
+  // the second one counts as introduced.
+  const ownExpr = readJsExprs(GAMMA).exprs[0];
+  const fragment = `serverName: gamma\ntransport: stdio\ncommand: node\nenv:\n  GAMMA_TOKEN: ${ownExpr}\n  OTHER: !!js process.env.HOME`;
   const panel = await prepareUpdate({ file, id: 'mcp-gamma', fragment });
   assert.equal(panel.ok, false);
   assert.equal(panel.code, 'js_expression_forbidden');
@@ -100,6 +103,7 @@ test('prepareUpdate refuses a new raw expression for the panel but allows it for
   const cli = await prepareUpdate({ file, id: 'mcp-gamma', fragment, allowJsExpr: true });
   assert.equal(cli.ok, true);
   assert.equal(cli.introducedJsExpr, 1);
+  assert.equal(cli.jsExprCount, 2);
 });
 
 test('prepareUpdate enforces the official rules on the candidate', async () => {

@@ -59,7 +59,7 @@ function assertValidSchema(schema, where) {
 
 test('every tool parameter schema is structurally valid JSON Schema', () => {
   const defs = createToolDefs('C:/nonexistent/cordis.patch.yml');
-  assert.equal(defs.length, 7);
+  assert.equal(defs.length, 8);
   for (const d of defs) {
     assertValidSchema(d.parameters, d.name);
   }
@@ -72,4 +72,16 @@ test('mcp_manager_credential constrains op with enum, not oneOf', () => {
   assert.deepEqual(op.enum, ['get', 'set']);
   assert.equal(op.oneOf, undefined, 'oneOf over scalars is invalid JSON Schema and breaks every request');
   assert.equal(op.type, 'string');
+});
+
+test('mcp_manager_update declares id/config as strings and confirm as a boolean', () => {
+  const defs = createToolDefs('C:/nonexistent/cordis.patch.yml');
+  const update = defs.find(d => d.name === 'mcp_manager_update');
+  assert.ok(update, 'the update tool must be registered');
+  assert.equal(update.parameters.type, 'object');
+  assert.equal(update.parameters.properties.id.type, 'string');
+  assert.equal(update.parameters.properties.config.type, 'string');
+  assert.equal(update.parameters.properties.confirm.type, 'boolean');
+  assert.equal(update.parameters.additionalProperties, false);
+  assert.equal(update.parameters.required, undefined, 'required-ness is enforced in execute, like the other tools');
 });

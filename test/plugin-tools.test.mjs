@@ -1,19 +1,22 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { fileURLToPath } from 'node:url';
+import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { createToolDefs, name, inject, apply } from '../index.js';
 
 const dir = path.dirname(fileURLToPath(import.meta.url));
 const sample = path.join(dir, 'fixtures/patch-sample.yml');
 
-test('exports official Host form and seven manager tools', () => {
+test('exports official Host form and eight manager tools', () => {
   assert.equal(name, 'dsh-mcp-manager');
   assert.deepEqual(inject, ['tools']);
   const defs = createToolDefs('C:/nonexistent/cordis.patch.yml');
   assert.deepEqual(defs.map(d => d.name).sort(), [
     'mcp_manager_add', 'mcp_manager_credential', 'mcp_manager_list',
-    'mcp_manager_probe', 'mcp_manager_remove', 'mcp_manager_toggle', 'mcp_manager_validate',
+    'mcp_manager_probe', 'mcp_manager_remove', 'mcp_manager_toggle',
+    'mcp_manager_update', 'mcp_manager_validate',
   ]);
   for (const d of defs) {
     assert.equal(typeof d.execute, 'function');
@@ -87,4 +90,50 @@ test('apply stays inert without a connection service', () => {
     inject: () => { /* service absent: the callback never runs */ },
   };
   assert.doesNotThrow(() => apply(ctx));
+});
+
+function tmpPatch() {
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-tools-'));
+  const f = path.join(d, 'cordis.patch.yml');
+  fs.copyFileSync(sample, f);
+  return f;
+}
+
+// Real probing spawns a process, so the write path injects the same stub the
+// route tests use: createToolDefs takes the probe as a seam for exactly this.
+const stubProbe = async () => ({ ok: true, toolCount: 3, tools: ['a', 'b', 'c'] });
+
+test('mcp_manager_update dry-runs, reports introduced expressions, then writes', async () => {
+  const file = tmpPatch();
+  const update = createToolDefs(file, { probe: stubProbe }).find((d) => d.name === 'mcp_manager_update');
+  assert.ok(update, 'the update tool must be registered');
+  const exec = { signal: new AbortController().signal };
+
+  const dry = await update.execute({ id: 'mcp-gamma', config: 'serverName: gamma\ntransport: stdio\ncommand: node' }, exec);
+  assert.match(dry.text, /DRY RUN/);
+  assert.ok(!fs.readFileSync(file, 'utf8').includes('toolCallTimeoutMs'));
+
+  const js = await update.execute({ id: 'mcp-gamma', config: "serverName: gamma\ntransport: stdio\ncommand: node\nenv:\n  X: !!js process.env.HOME" }, exec);
+  assert.match(js.text, /adds 1 new !!js expression/);
+
+  const bad = await update.execute({ id: 'mcp-gamma', config: 'serverName: gamma\ntransport: stdio' }, exec);
+  assert.match(bad.text, /FAIL rules_failed/);
+
+  const ok = await update.execute({ id: 'mcp-gamma', config: 'serverName: gamma\ntransport: stdio\ncommand: node\ntoolCallTimeoutMs: 90000', confirm: true }, exec);
+  assert.match(ok.text, /updated mcp-gamma/);
+  assert.match(ok.text, /probe OK: 3 tools/);
+  assert.ok(fs.readFileSync(file, 'utf8').includes('toolCallTimeoutMs: 90000'));
+});
+
+test('mcp_manager_update keeps the row\'s !!js expression when fed a placeholder', async () => {
+  const file = tmpPatch();
+  const defs = createToolDefs(file, { probe: stubProbe });
+  const { toPanelView } = await import('../lib/update.js');
+  const { readConfigBlock } = await import('../lib/surgery.js');
+  const view = toPanelView(readConfigBlock(fs.readFileSync(file, 'utf8'), 'mcp-gamma').configText);
+
+  const out = await defs.find((d) => d.name === 'mcp_manager_update')
+    .execute({ id: 'mcp-gamma', config: view.configText, confirm: true }, { signal: new AbortController().signal });
+  assert.match(out.text, /updated mcp-gamma/);
+  assert.ok(fs.readFileSync(file, 'utf8').includes("GAMMA_TOKEN: !!js require('fs')"), 'the expression came back verbatim');
 });
