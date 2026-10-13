@@ -115,3 +115,27 @@ test('an appended row carrying a scoped package survives the validation gate', a
   assert.equal(r.applied, true);
   assert.match(fs.readFileSync(file, 'utf8'), /@modelcontextprotocol\/server-everything/);
 });
+
+test('applySurgeryAsync runs preCommit and aborts the write when it throws', async () => {
+  const file = tmpPatch(SAMPLE);
+  const before = fs.readFileSync(file, 'utf8');
+  await assert.rejects(() => applySurgeryAsync({
+    file,
+    operation: { type: 'replaceConfig', id: 'mcp-gamma', fragment: 'serverName: gamma\ntransport: stdio\ncommand: node' },
+    preCommit: async () => { throw new Error('semantic veto'); },
+  }), /semantic veto/);
+  assert.equal(fs.readFileSync(file, 'utf8'), before, 'the live file is untouched');
+});
+
+test('applySurgeryAsync applies the replaceConfig operation', async () => {
+  const file = tmpPatch(SAMPLE);
+  const r = await applySurgeryAsync({
+    file,
+    operation: { type: 'replaceConfig', id: 'mcp-gamma', fragment: 'serverName: gamma\ntransport: stdio\ncommand: node' },
+  });
+  assert.equal(r.applied, true);
+  const text = fs.readFileSync(file, 'utf8');
+  assert.ok(text.includes('serverName: gamma'));
+  assert.ok(!text.includes('GAMMA_TOKEN'));
+  assert.ok(text.includes('mcp-alpha') && text.includes('mcp-beta'), 'siblings untouched');
+});
