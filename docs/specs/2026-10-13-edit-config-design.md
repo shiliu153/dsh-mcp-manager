@@ -103,7 +103,7 @@ export async function applyUpdate({ file, id, fragment, allowJsExpr = false, exp
 }
 
 /** GET /servers 用:把子树原文转成面板可安全展示的形式。 */
-export function toPanelView(rawConfigText, { kind }) → {
+export function toPanelView(configText) → {
   configText: string,        // !!js 值 → `!!js «k»`;硬编码秘密值 → `B*****`
   jsExprs: string[],         // 每个令牌的人类可读描述,如 `credential file: C:/…/github-mcp-token.txt`
   editable: boolean,         // 含硬编码秘密时为 false
