@@ -36,7 +36,10 @@ test('enable/disable roundtrip on a copy', () => {
     assert.equal(run(['enable', 'mcp-alpha', '--file', copy, '--yes']).status, 0);
     assert.equal(blockDisabled(copy, 'mcp-alpha'), false);
     assert.equal(blockDisabled(copy, 'mcp-gamma'), true, 'gamma untouched');
-  } finally { fs.rmSync(copy, { force: true }); }
+  } finally {
+    fs.rmSync(copy, { force: true });
+    fs.rmSync(copy + '.bak', { force: true });
+  }
 });
 
 import { findRow } from '../lib/surgery.js';
@@ -102,6 +105,7 @@ test('add refuses a serverName that is already registered', () => {
     assert.equal(fs.readFileSync(copy, 'utf8'), fs.readFileSync(sample, 'utf8'), 'the live file is untouched');
   } finally {
     fs.rmSync(copy, { force: true });
+    fs.rmSync(copy + '.bak', { force: true });
     fs.rmSync(copy + '.candidate', { force: true });
   }
 });
