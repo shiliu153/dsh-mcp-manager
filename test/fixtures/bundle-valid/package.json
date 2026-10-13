@@ -4,5 +4,6 @@
   "private": true,
   "type": "module",
   "exports": { ".": "./index.js" },
+  "files": ["index.js", "icon.svg", "cordis.patch.yml"],
   "dsh": { "bundle": { "patch": "./cordis.patch.yml" } }
 }

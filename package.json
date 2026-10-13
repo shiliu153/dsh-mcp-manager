@@ -5,12 +5,13 @@
   "private": true,
   "type": "module",
   "bin": { "dsh-mcp": "./cli/mcp.js" },
+  "main": "./index.js",
   "exports": {
     ".": "./index.js",
     "./package.json": "./package.json",
     "./locale/*.json": "./locale/*.json"
   },
-  "files": ["index.js", "lib/", "cli/", "locale/", "icon.svg", "assets/"],
+  "files": ["index.js", "lib/", "cli/", "locale/", "icon.svg", "assets/", "cordis.patch.yml"],
   "icon": "./icon.svg",
   "dsh": { "bundle": { "patch": "./cordis.patch.yml" } }
 }

@@ -23,6 +23,11 @@ export function checkBundle(dir) {
       const text = fs.readFileSync(patchAbs, 'utf8');
       if (!/^- insert:/m.test(text) && !/^- id:/m.test(text)) errors.push('patch has no top-level entries');
       if (!/- id:\s*\S+/.test(text)) errors.push('patch has no row ids');
+      // npm packfiles ("files" allowlist) must include the patch file itself, or
+      // GitHub/tarball installs strip it and loader validation fails (E2E 2026-10-13).
+      const files = manifest.files ?? [];
+      const patchListed = files.some((f) => f === patchRel || f === patchRel.replace(/^\.\//, ''));
+      if (!patchListed) errors.push(`files allowlist must include the patch file (${patchRel}) or installs strip it`);
     }
   }
   for (const loc of ['locale/en.json', 'locale/zh.json']) {
