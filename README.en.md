@@ -1,0 +1,168 @@
+# dsh-mcp-manager for DSH
+
+[English](README.en.md) | [中文](README.md)
+
+A [DeepSeek Harness](https://github.com/topics/dsh-plugin) bundle that manages MCP
+servers registered in your DSH patch files: list, real-handshake probe, add from a
+pasted project reference, enable/disable, remove, and credential rotation —
+following the official `@deepseek-ai/dsh-mcp-client` configuration contract.
+
+## Install
+
+**Option A — agent tool (Creator mode):** ask your agent:
+
+```
+plugin_manager install_bundle https://github.com/shiliu153/dsh-mcp-manager
+```
+
+**Option B — Web UI:** open the sidebar **Plugins** page in the DSH Web app and
+install from the GitHub URL above.
+
+Both official channels run pnpm, validate the bundle manifest, and select the
+bundle automatically. After installation, eight tools become available to agents:
+
+| Tool | Purpose |
+|---|---|
+| `mcp_manager_list` | List registered MCP servers (credential values masked) |
+| `mcp_manager_probe` | Real MCP handshake (`initialize` + `tools/list`) against one or all servers |
+| `mcp_manager_add` | Paste an npm package / GitHub repo URL / MCP endpoint URL / JSON config; dry-run by default, `confirm: true` writes it |
+| `mcp_manager_update` | Replace one entry's `config:` subtree with YAML text; dry-run by default, `confirm: true` writes it |
+| `mcp_manager_remove` | Remove an entry (`confirm: true` required) |
+| `mcp_manager_toggle` | Enable/disable an entry (`confirm: true` required) |
+| `mcp_manager_credential` | Locate / mask-display / rotate the `!!js`-referenced credential file |
+| `mcp_manager_validate` | Check an entry against the official mcp-client rules |
+
+Verify after installation: the tool call returns `application: applied`; then call
+`mcp_manager_list` — it should show your servers (chrome-devtools, playwright,
+github, …). A server's tools appear as `mcp__<serverName>__<tool>` as soon as its
+row mounts: DSH hot-reloads the patch, so a running session picks them up with no
+restart (measured against a live install, 2026-10-13).
+
+## CLI
+
+The bundle also ships a zero-dependency CLI (same engine, no harness needed):
+
+```sh
+node cli/mcp.js list [--json]
+node cli/mcp.js probe [--id <id>] [--timeout 60]
+node cli/mcp.js add "<npm-package | github-url | mcp-url | json>" [--yes] [--no-probe]
+node cli/mcp.js show <id> [--json] [--masked]
+node cli/mcp.js edit <id> [--config <file>] [--yes]      # no --config reads stdin
+node cli/mcp.js enable|disable <id> --yes
+node cli/mcp.js remove <id> --yes
+node cli/mcp.js credential <id> get|set <value>
+node cli/mcp.js validate <id>
+node cli/mcp.js schema
+```
+
+All writes go through the same guarded pipeline: surgery on a candidate copy →
+validation with DSH's own loader (`loadOptionalPatches`) → atomic write with a
+`.bak` backup. A candidate that fails validation never reaches your live patch.
+
+## Panel (Web GUI)
+
+With the bundle enabled, the **DSH MCP manager** page under Plugins grows a
+section listing your registered MCP servers:
+
+- one row per server: a status dot, id, serverName, transport, and the command
+  line or URL;
+- a **status dot** where the text badge used to be — green (connected), amber
+  (enabled, not connected), grey (disabled), or a hollow ring when the live
+  registry cannot be read. It is the host's own `StateDot` primitive, read from
+  the harness's MCP resource registry at zero cost, so "configured" and
+  "actually connected" are no longer the same thing on screen. Hovering it
+  shows the state as text in the host's `Tooltip`;
+- **Probe** per row: a real handshake reporting the tool count, or the failure
+  reason. Nothing is probed automatically; the list opens instantly;
+- **Probe all** in the panel header: one click probes every registered server
+  concurrently and reports per row;
+- an enable/disable switch, and a delete that asks once inline;
+- **Edit** per row: the row opens a textarea holding its own `config:` subtree as
+  YAML — comments, key order and `!!js` references included. **Validate** dry-runs
+  the change against the official rules, **Write** applies it through the guarded
+  pipeline and probes the result. A `!!js` value appears as an opaque placeholder
+  (`Authorization: !!js «0»`) that the host refills verbatim, so the browser can
+  never introduce or alter an expression — the Loader evaluates those at runtime,
+  which would be code execution in the harness process. Rows carrying a hardcoded
+  secret are read-only here; fix those from the CLI or the agent tool;
+- an add box: paste an npm package, GitHub repo, MCP endpoint or JSON fragment,
+  see the exact YAML that would be appended, then write it.
+
+Credential **rotation** stays in the CLI and the agent tools. Editing itself is
+available in all three surfaces; the CLI and `mcp_manager_update` may write raw
+`!!js` text (the same trust level as editing the patch file by hand), the panel
+may not.
+
+It talks to the host over exact Fetch routes under `/api/dsh-mcp-manager/`,
+registered through `ctx.connection.registerFetchRoute` so the harness's own
+Host/Origin checks and browser-session authentication run first. The panel
+implements no trust boundary of its own, and every write goes through the same
+guarded pipeline as the CLI.
+
+## What it writes
+
+Entries follow the official `@deepseek-ai/dsh-mcp-client` contract exactly:
+
+```yaml
+- insert:
+    - id: mcp-<serverName>
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: <serverName>      # [A-Za-z0-9_-]{1,32}, unique
+        transport: stdio              # or streamable-http
+        command: npx                  # stdio only
+        args: ['-y', '<package>']
+        failOnStartupError: true      # default for rows this plugin writes
+```
+
+A new server goes inside its own `insert:` list. A bare top-level entry overrides
+an *existing* row by id, and the loader warns about and skips one that matches no
+row — so appending a bare entry, however well-formed, never mounts a new server.
+
+Secrets are never written into the patch: the tool stores them in a credential
+file and references it with a `!!js` expression (the same pattern the official
+GitHub entry uses). DSH hot-reloads the patch — new servers appear without a
+restart.
+
+Editing replaces one entry's `config:` subtree and nothing else: the comment
+block above the entry, its `- id:`, `name:` and `disabled:` lines, and every
+other entry stay byte-identical. Reading a subtree and writing it straight back
+reproduces the file exactly, which is what the test suite asserts.
+
+## Scope and safety
+
+- Writes target the **home** overlay `~/.dsh/cordis.patch.yml` (official
+  composition order: bundle patches → profile patch → home patch → `--patch`).
+- Every mutation requires explicit confirmation (`confirm: true` / `--yes`);
+  removals, toggles and edits keep a `.bak` of the previous file.
+- An edit is validated four ways before it lands: the candidate must parse under
+  DSH's own loader, pass the official field rules, carry no hardcoded secret, and
+  keep every `serverName` unique. A rejected candidate never reaches the live
+  file.
+- An **add** is gated before the write as well as after it: the candidate row
+  must sit inside an insert list, must parse back through the loader with a
+  `serverName`, and must not duplicate one already registered. The same check
+  then runs against the persisted row before the probe, so `probe OK` can only
+  describe a row that is really in the file.
+- The panel holds an edit as raw text while you type, so it echoes the file's
+  `mtime` back on write: if the file changed underneath, the write is refused
+  with `file_changed` instead of clobbering it.
+- Probes are read-only; they never start browsers or send credentials anywhere
+  beyond the server's own endpoint.
+- A probe resolves `!!js` values the way the harness does before sending them.
+  The loader hands back an inert `{ __jsExpr }` marker, so a credential written
+  as an expression used to reach the server as `Authorization: [object Object]`
+  and come back as `400 … header is badly formatted` — a healthy credential
+  reported as a malformed one. An expression that cannot be evaluated is now
+  reported by name instead of being forwarded.
+
+## Development
+
+```sh
+node --test "test/*.test.mjs"   # 179 tests, zero dependencies
+node -e "import('./scripts/check-bundle.mjs').then(m => console.log(m.checkBundle('.')))"
+```
+
+Official rules are vendored under `docs/official/` (extracted from the installed
+DSH `app.asar`; provenance in `docs/official/README.md`), design and plan under
+`docs/`.
