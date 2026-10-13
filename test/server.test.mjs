@@ -146,3 +146,29 @@ test('POST endpoints reject malformed JSON', async () => {
   assert.equal(res.status, 400);
   assert.equal((await res.json()).error.code, 'bad_request');
 });
+
+test('POST /probe reports a failure reason for an unknown id', async () => {
+  const routes = createRoutes(fakeCtx(), { patchPath: fixture });
+  const res = await post(routeFor(routes, 'POST', '/probe'), { id: 'nope' });
+  assert.equal(res.status, 404);
+  assert.equal((await res.json()).error.code, 'not_found');
+});
+
+test('POST /probe rejects a missing id', async () => {
+  const routes = createRoutes(fakeCtx(), { patchPath: fixture });
+  const res = await post(routeFor(routes, 'POST', '/probe'), {});
+  assert.equal(res.status, 400);
+});
+
+test('POST /probe answers 200 with an error field when the handshake fails', async () => {
+  // The fixture's beta row points at https://example.invalid/mcp, which cannot resolve.
+  const routes = createRoutes(fakeCtx(), { patchPath: fixture });
+  const res = await post(routeFor(routes, 'POST', '/probe'), { id: 'mcp-beta', timeout_s: 5 });
+  assert.equal(res.status, 200, 'a failed handshake is still a successful request');
+  const body = await res.json();
+  assert.equal(body.id, 'mcp-beta');
+  assert.equal(body.toolCount, 0);
+  assert.deepEqual(body.tools, []);
+  assert.equal(typeof body.error, 'string');
+  assert.ok(body.error.length > 0);
+});
