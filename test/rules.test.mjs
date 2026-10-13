@@ -61,3 +61,24 @@ test('checkSecrets accepts !!js reference, rejects literal', () => {
   const bad = checkSecrets("      GITHUB_TOKEN: ghp_literal\n");
   assert.equal(bad.ok, false);
 });
+
+test('checkSecrets sees a multi-token Bearer value and a dashed key', () => {
+  // The old guard matched only single-token values on keys without `-`, so the
+  // most common shape of a leaked token was invisible to it.
+  const r = checkSecrets('headers:\n  Authorization: Bearer abc123\n  X-Api-Key: k-123\n');
+  assert.equal(r.ok, false);
+  assert.equal(r.errors.length, 2, r.errors.join('; '));
+});
+
+test('checkSecrets does not let a bare parent key swallow the next line', () => {
+  // `\s*` used to cross the newline, so `headers:` consumed the following line
+  // whole and the secret underneath was attributed to `headers` and dropped.
+  const r = checkSecrets('headers:\n  Authorization: Bearer abc123\n');
+  assert.equal(r.ok, false);
+  assert.match(r.errors[0], /^Authorization/);
+});
+
+test('checkSecrets still passes an unrelated mapping', () => {
+  const r = checkSecrets('headers:\n  Accept: application/json\n');
+  assert.equal(r.ok, true);
+});
