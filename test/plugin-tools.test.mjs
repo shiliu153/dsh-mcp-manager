@@ -73,9 +73,10 @@ test('apply registers Fetch routes when a connection service is present', () => 
     },
   };
   apply(ctx);
-  assert.equal(registered.length, 5, `expected the five panel routes, got ${registered.length}`);
+  assert.equal(registered.length, 6, `expected the six panel routes, got ${registered.length}`);
   assert.ok(registered.every((r) => r.path.startsWith('/api/dsh-mcp-manager/')));
   assert.ok(registered.some((r) => r.path.endsWith('/servers') && r.methods.includes('GET')));
+  assert.ok(registered.some((r) => r.path.endsWith('/update') && r.methods.includes('POST')));
   assert.ok(registered.every((r) => r.path.startsWith('/api/')), 'every path must sit under /api');
 });
 

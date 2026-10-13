@@ -53,7 +53,9 @@ test('GET /servers lists MCP rows only, masked, with live flags', async () => {
   assert.deepEqual(body.servers.map((s) => s.id), ['mcp-alpha', 'mcp-beta', 'mcp-gamma']);
   const alpha = body.servers.find((s) => s.id === 'mcp-alpha');
   assert.deepEqual(alpha, { id: 'mcp-alpha', serverName: 'alpha', transport: 'stdio',
-    command: 'npx', args: ['-y', 'alpha-mcp'], url: '', disabled: false, live: true });
+    command: 'npx', args: ['-y', 'alpha-mcp'], url: '', disabled: false, live: true,
+    configText: "serverName: alpha\ntransport: stdio\ncommand: npx\nargs: ['-y', 'alpha-mcp']",
+    jsExprs: [], editable: true, editReason: '' });
   const beta = body.servers.find((s) => s.id === 'mcp-beta');
   assert.equal(beta.live, false);
   const gamma = body.servers.find((s) => s.id === 'mcp-gamma');
@@ -64,7 +66,11 @@ test('GET /servers lists MCP rows only, masked, with live flags', async () => {
 test('GET /servers never leaks a credential value', async () => {
   const routes = createRoutes(fakeCtx(), { patchPath: fixture });
   const text = await (await get(routeFor(routes, 'GET', '/servers'))).text();
-  assert.ok(!text.includes('gamma-token.txt'), 'raw expression must not reach the browser');
+  assert.ok(!text.includes('readFileSync'), 'the raw expression must not reach the browser');
+  // The credential FILE reference is exposed on purpose: the panel shows
+  // `GAMMA_TOKEN: !!js «0»` and the hint line has to say which file it reads,
+  // otherwise the placeholder is meaningless. The file's contents never are.
+  assert.ok(text.includes('credential file: C:/Users/x/gamma-token.txt'));
 });
 
 test('GET /servers reports resourcesAvailable false when mcpResources is absent', async () => {
@@ -214,4 +220,83 @@ test('POST /add with confirm writes the entry and reports the probe', async () =
   const text = fs.readFileSync(file, 'utf8');
   assert.match(text, /server-everything/);
   assert.match(text, /# keep this comment/, 'existing comments kept');
+});
+
+// ---- the edit route: same fixture, same throwaway-copy discipline ----
+
+test('GET /servers exposes the editable subtree with placeholders', async () => {
+  const routes = createRoutes(fakeCtx(), { patchPath: fixture });
+  const res = await get(routeFor(routes, 'GET', '/servers'));
+  const body = await res.json();
+  assert.equal(typeof body.mtimeMs, 'number');
+  const gamma = body.servers.find((s) => s.id === 'mcp-gamma');
+  assert.equal(gamma.editable, true);
+  assert.equal(gamma.editReason, '');
+  assert.ok(gamma.configText.includes('GAMMA_TOKEN: !!js «0»'));
+  assert.ok(!gamma.configText.includes('readFileSync'));
+  assert.deepEqual(gamma.jsExprs, ['credential file: C:/Users/x/gamma-token.txt']);
+});
+
+test('POST /update dry-runs, then writes and probes', async () => {
+  const file = copyFixture();
+  const routes = createRoutes(fakeCtx(), { patchPath: file, probe: stubProbe });
+  const update = routeFor(routes, 'POST', '/update');
+
+  const dry = await post(update, { id: 'mcp-gamma', config: 'serverName: gamma\ntransport: stdio\ncommand: node' });
+  assert.equal(dry.status, 200);
+  assert.equal((await dry.json()).written, false);
+  assert.ok(!fs.readFileSync(file, 'utf8').includes('toolCallTimeoutMs'), 'dry run must not write');
+
+  const ok = await post(update, { id: 'mcp-gamma', config: 'serverName: gamma\ntransport: stdio\ncommand: node\ntoolCallTimeoutMs: 90000', confirm: true });
+  const body = await ok.json();
+  assert.equal(body.written, true);
+  assert.ok(body.backup.endsWith('.bak'));
+  const text = fs.readFileSync(file, 'utf8');
+  assert.ok(text.includes('toolCallTimeoutMs: 90000'));
+  assert.match(text, /# keep this comment/, 'comments survive');
+  assert.deepEqual(body.probe, { ok: true, toolCount: 3 });
+});
+
+test('POST /update keeps the !!js expression when the panel round-trips a placeholder', async () => {
+  const file = copyFixture();
+  const routes = createRoutes(fakeCtx(), { patchPath: file, probe: stubProbe });
+  const view = await (await get(routeFor(routes, 'GET', '/servers'))).json();
+  const gamma = view.servers.find((s) => s.id === 'mcp-gamma');
+
+  const res = await post(routeFor(routes, 'POST', '/update'), {
+    id: 'mcp-gamma', config: `${gamma.configText}\ntoolCallTimeoutMs: 90000`, confirm: true, expectMtime: view.mtimeMs,
+  });
+  assert.equal(res.status, 200);
+  const text = fs.readFileSync(file, 'utf8');
+  assert.ok(text.includes("GAMMA_TOKEN: !!js require('fs')"), 'the expression came back verbatim');
+  assert.ok(text.includes('toolCallTimeoutMs: 90000'));
+});
+
+test('POST /update rejects a new !!js expression, a bad rule and a stale read', async () => {
+  const file = copyFixture();
+  const routes = createRoutes(fakeCtx(), { patchPath: file, probe: stubProbe });
+  const update = routeFor(routes, 'POST', '/update');
+
+  const js = await post(update, { id: 'mcp-gamma', config: "serverName: gamma\ntransport: stdio\ncommand: node\nenv:\n  X: !!js process.env.HOME" });
+  assert.equal(js.status, 400);
+  assert.equal((await js.json()).error.code, 'js_expression_forbidden');
+
+  const rules = await post(update, { id: 'mcp-gamma', config: 'serverName: gamma\ntransport: stdio' });
+  assert.equal(rules.status, 400);
+  assert.equal((await rules.json()).error.code, 'rules_failed');
+
+  const secret = await post(update, { id: 'mcp-gamma', config: 'serverName: gamma\ntransport: streamable-http\nurl: https://x/mcp\nheaders:\n  Authorization: Bearer abc' });
+  assert.equal(secret.status, 400);
+  assert.equal((await secret.json()).error.code, 'hardcoded_secret');
+
+  const stale = await post(update, { id: 'mcp-gamma', config: 'serverName: gamma\ntransport: stdio\ncommand: node', confirm: true, expectMtime: 1 });
+  assert.equal(stale.status, 409);
+  assert.equal((await stale.json()).error.code, 'file_changed');
+
+  const badBody = await post(update, { id: 'mcp-gamma' });
+  assert.equal(badBody.status, 400);
+  assert.equal((await badBody.json()).error.code, 'bad_request');
+
+  const missing = await post(update, { id: 'nope', config: 'a: 1' });
+  assert.equal(missing.status, 404);
 });
