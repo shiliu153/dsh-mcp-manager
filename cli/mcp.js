@@ -17,7 +17,7 @@ import { validateEntry, SERVER_NAME_RE } from '../lib/rules.js';
 import { isMcpClientRow, maskEntry } from '../lib/rows.js';
 import { loadPatchStructured } from '../lib/dump.js';
 import { probeConfig } from '../lib/probe.js';
-import { defaultPatchPath, renderEntryRow, applySurgery, applySurgeryAsync, readBackEntry } from '../lib/patchfile.js';
+import { defaultPatchPath, renderEntryRow, applySurgery, applySurgeryAsync, readBackEntry, appendEntryGate } from '../lib/patchfile.js';
 import { prepareUpdate, applyUpdate, toPanelView } from '../lib/update.js';
 import { resolveInput } from '../lib/resolve.js';
 
@@ -123,7 +123,20 @@ switch (cmd) {
       console.log('--- dry run: nothing written. Re-run with --yes to write. ---');
       break;
     }
-    const r = await applySurgeryAsync({ file: FILE, operation: { type: 'appendEntry', row } });
+    let r;
+    try {
+      r = await applySurgeryAsync({
+        file: FILE,
+        operation: { type: 'appendEntry', row },
+        preCommit: appendEntryGate({ id: row.id, serverName: entry.config.serverName }),
+      });
+    } catch (e) {
+      // Unlike `edit`, the add path rejects during the write (the gate needs the
+      // rendered candidate), so report the refusal instead of letting the throw
+      // reach the top level as a stack dump.
+      console.error(`FAIL ${String(e.message || e)}`);
+      process.exit(1);
+    }
     console.log(`written (backup: ${r.backupPath})`);
     if (flags.noProbe) break;
     // Verify what landed, never the object we just built.

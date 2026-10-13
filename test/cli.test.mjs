@@ -90,6 +90,21 @@ test('add --yes writes a row the plugin can read back with its config', () => {
   }
 });
 
+test('add refuses a serverName that is already registered', () => {
+  const copy = path.join(dir, 'tmp-add-dup.yml');
+  fs.copyFileSync(sample, copy);
+  try {
+    const r = run(['add', 'alpha-mcp', '--file', copy, '--yes', '--no-probe']);
+    assert.equal(r.status, 1);
+    assert.match(r.stderr + r.stdout, /duplicate serverName: alpha/);
+    assert.ok(!r.stderr.includes('at applySurgeryAsync'), 'a refusal is reported, not dumped as a crash');
+    assert.equal(fs.readFileSync(copy, 'utf8'), fs.readFileSync(sample, 'utf8'), 'the live file is untouched');
+  } finally {
+    fs.rmSync(copy, { force: true });
+    fs.rmSync(copy + '.candidate', { force: true });
+  }
+});
+
 test('usage error exits 2', () => {
   assert.equal(run(['bogus-command']).status, 2);
 });

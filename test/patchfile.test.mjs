@@ -6,6 +6,7 @@ import path from 'node:path';
 import { applySurgery, applySurgeryAsync, renderEntryRow } from '../lib/patchfile.js';
 import { findRow } from '../lib/surgery.js';
 import { loadPatchText } from '../lib/dump.js';
+import * as patchfileApi from '../lib/patchfile.js';
 
 function tmpPatch(content) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dshmcp-'));
@@ -161,4 +162,39 @@ test('an appended row is mountable and survives a read-back with its config', as
   assert.ok(entry, 'the appended entry must be readable back');
   assert.equal(entry.config.serverName, 'delta');
   assert.deepEqual(entry.config.args, ['-y', 'delta-mcp']);
+});
+
+// "A rejected candidate never reaches your live patch" is the plugin's whole
+// promise, and the append shape is exactly what slipped past the gate. These
+// two tests pin the gate and the seam that feeds it.
+test('appendedRowProblem names why a candidate row would not mount', async () => {
+  const cases = [
+    ['- id: mcp-delta\n  name: n\n  config:\n    serverName: delta\n', /insert list/],
+    ['- insert:\n    - id: mcp-delta\n      name: n\n      serverName: delta\n', /usable config/],
+  ];
+  for (const [text, re] of cases) {
+    const { entries } = await loadPatchText(text);
+    assert.match(patchfileApi.appendedRowProblem(text, entries, 'mcp-delta'), re, text);
+  }
+
+  const good = '- insert:\n    - id: mcp-delta\n      name: n\n      config:\n        serverName: delta\n';
+  const { entries } = await loadPatchText(good);
+  assert.equal(patchfileApi.appendedRowProblem(good, entries, 'mcp-delta'), undefined);
+});
+
+test('applySurgeryAsync hands preCommit the candidate text and its parsed entries', async () => {
+  const file = tmpPatch(SAMPLE);
+  let seen;
+  const row = renderEntryRow({
+    id: 'mcp-delta', name: '@deepseek-ai/dsh-mcp-client',
+    config: { serverName: 'delta', transport: 'stdio', command: 'npx' },
+  });
+  await applySurgeryAsync({
+    file,
+    operation: { type: 'appendEntry', row },
+    preCommit: async (text, parsed) => { seen = { text, parsed }; },
+  });
+  assert.match(seen.text, /mcp-delta/);
+  assert.ok(seen.parsed?.entries?.some((e) => e.id === 'mcp-delta'),
+    'preCommit cannot verify the config without the parsed entries');
 });

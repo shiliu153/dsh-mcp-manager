@@ -59,3 +59,22 @@ test('json with secret-named env value passes through (no pseudo-warning)', asyn
 test('unrecognized input throws', async () => {
   await assert.rejects(() => resolveInput('not a package or url!!'), /unrecognized/i);
 });
+
+// Every row this plugin writes carries the flag, so a server that cannot start
+// is loud instead of silently tool-less. The design and the README both promise
+// it; until now resolveInput never set it.
+test('a resolved entry defaults failOnStartupError to true', async () => {
+  for (const input of [
+    '@upstash/context7-mcp',
+    'https://api.example.com/mcp',
+    '{"mcpServers":{"fs":{"command":"npx","args":["-y","pkg"]}}}',
+  ]) {
+    const { entry } = await resolveInput(input);
+    assert.equal(entry.config.failOnStartupError, true, input);
+  }
+});
+
+test('an explicit failOnStartupError is not overridden', async () => {
+  const { entry } = await resolveInput('{"mcpServers":{"x":{"config":{"transport":"stdio","command":"node","failOnStartupError":false}}}}');
+  assert.equal(entry.config.failOnStartupError, false);
+});

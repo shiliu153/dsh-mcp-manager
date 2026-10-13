@@ -162,3 +162,15 @@ test('mcp_manager_add probes the persisted row, not the in-memory entry', async 
   assert.deepEqual(seen[0], persisted.config, 'the probe must see the persisted config');
   assert.equal(seen[0].serverName, 'context7');
 });
+
+// The update path has always refused a duplicate serverName; the add path did
+// not, so adding a server twice produced two rows the loader rejects as a pair.
+test('mcp_manager_add refuses a serverName that is already registered', async () => {
+  const file = tmpPatch();
+  const before = fs.readFileSync(file, 'utf8');
+  const add = createToolDefs(file, { probe: stubProbe }).find((d) => d.name === 'mcp_manager_add');
+
+  const out = await add.execute({ input: 'alpha-mcp', confirm: true }, { signal: new AbortController().signal });
+  assert.match(out.text, /duplicate serverName: alpha/, out.text);
+  assert.equal(fs.readFileSync(file, 'utf8'), before, 'the live file must be untouched');
+});
