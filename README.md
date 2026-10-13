@@ -52,6 +52,30 @@ All writes go through the same guarded pipeline: surgery on a candidate copy →
 validation with DSH's own loader (`loadOptionalPatches`) → atomic write with a
 `.bak` backup. A candidate that fails validation never reaches your live patch.
 
+## Panel (Web GUI)
+
+With the bundle enabled, the **DSH MCP manager** page under Plugins grows a
+section listing your registered MCP servers:
+
+- one row per server: id, serverName, transport, and the command line or URL;
+- a connection badge — `Connected` / `Enabled · not connected` / `Disabled` —
+  read from the harness's live MCP resource registry at zero cost, so
+  "configured" and "actually connected" are no longer the same thing on screen;
+- **Probe** per row: a real handshake reporting the tool count, or the failure
+  reason. Nothing is probed automatically; the list opens instantly;
+- an enable/disable switch, and a delete that asks once inline;
+- an add box: paste an npm package, GitHub repo, MCP endpoint or JSON fragment,
+  see the exact YAML that would be appended, then write it.
+
+The panel deliberately does **not** edit arbitrary config fields or rotate
+credentials — those stay in the CLI and the agent tools.
+
+It talks to the host over exact Fetch routes under `/api/dsh-mcp-manager/`,
+registered through `ctx.connection.registerFetchRoute` so the harness's own
+Host/Origin checks and browser-session authentication run first. The panel
+implements no trust boundary of its own, and every write goes through the same
+guarded pipeline as the CLI.
+
 ## What it writes
 
 Entries follow the official `@deepseek-ai/dsh-mcp-client` contract exactly:
@@ -84,7 +108,7 @@ restart.
 ## Development
 
 ```sh
-node --test "test/*.test.mjs"   # 58 tests, zero dependencies
+node --test "test/*.test.mjs"   # 98 tests, zero dependencies
 node -e "import('./scripts/check-bundle.mjs').then(m => console.log(m.checkBundle('.')))"
 ```
 
