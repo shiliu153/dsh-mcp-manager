@@ -11,14 +11,14 @@ import { loadPatchText } from '../lib/dump.js';
 const dir = path.dirname(fileURLToPath(import.meta.url));
 const sample = path.join(dir, 'fixtures/patch-sample.yml');
 
-test('exports official Host form and eight manager tools', () => {
+test('exports official Host form and nine manager tools', () => {
   assert.equal(name, 'dsh-mcp-manager');
   assert.deepEqual(inject, ['tools']);
   const defs = createToolDefs('C:/nonexistent/cordis.patch.yml');
   assert.deepEqual(defs.map(d => d.name).sort(), [
     'mcp_manager_add', 'mcp_manager_credential', 'mcp_manager_list',
-    'mcp_manager_probe', 'mcp_manager_remove', 'mcp_manager_toggle',
-    'mcp_manager_update', 'mcp_manager_validate',
+    'mcp_manager_probe', 'mcp_manager_remove', 'mcp_manager_search',
+    'mcp_manager_toggle', 'mcp_manager_update', 'mcp_manager_validate',
   ]);
   for (const d of defs) {
     assert.equal(typeof d.execute, 'function');
@@ -176,4 +176,145 @@ test('mcp_manager_add refuses a serverName that is already registered', async ()
   assert.match(out.text, /duplicate serverName: alpha/, out.text);
   assert.ok(!out.text.includes('candidate failed validation'), 'the reason alone, not the pipeline internals');
   assert.equal(fs.readFileSync(file, 'utf8'), before, 'the live file must be untouched');
+});
+
+// ---- market tool -------------------------------------------------------------
+
+const REGISTRY_ENTRY = {
+  server: {
+    name: 'ai.ankimcp/anki-mcp-server',
+    title: 'Anki MCP Server',
+    description: 'MCP server for Anki flashcards.',
+    version: '0.27.0',
+    packages: [{ registryType: 'npm', identifier: '@ankimcp/anki-mcp-server', version: '0.27.0', transport: { type: 'stdio' } }],
+  },
+  _meta: { 'io.modelcontextprotocol.registry/official': { status: 'active', publishedAt: 'P', updatedAt: 'U', isLatest: true } },
+};
+
+const stubSearch = (servers, extra = {}) => async () => ({ servers, nextCursor: undefined, fetchedAt: 0, fromCache: false, ...extra });
+const stubGet = (server, extra = {}) => async () => ({ server, fromCache: false, ...extra });
+const toolNamed = (file, toolName, opts = {}) =>
+  createToolDefs(file, { probe: stubProbe, ...opts }).find((d) => d.name === toolName);
+// tmpPatch() makes a fresh mkdtemp directory per call; drop the whole directory.
+const dropPatch = (file) => fs.rmSync(path.dirname(file), { recursive: true, force: true });
+
+test('mcp_manager_search is read-only and lists the execution surface', async () => {
+  const file = tmpPatch();
+  try {
+    const before = fs.readFileSync(file, 'utf8');
+    const tool = toolNamed(file, 'mcp_manager_search', { search: stubSearch([REGISTRY_ENTRY]) });
+    const out = await tool.execute({ query: 'anki' }, {});
+    assert.match(out.text, /ai\.ankimcp\/anki-mcp-server@0\.27\.0/);
+    assert.match(out.text, /npx -y @ankimcp\/anki-mcp-server@0\.27\.0/);
+    assert.match(out.text, /serverName: anki-mcp-server/);
+    assert.equal(fs.readFileSync(file, 'utf8'), before, 'search must not write');
+  } finally { dropPatch(file); }
+});
+
+test('mcp_manager_search reports an unreachable registry as text, not a throw', async () => {
+  const file = tmpPatch();
+  try {
+    const tool = toolNamed(file, 'mcp_manager_search', { search: stubSearch([], { degraded: 'HTTP 503' }) });
+    const out = await tool.execute({ query: 'x' }, {});
+    assert.match(out.text, /registry unreachable: HTTP 503/);
+  } finally { dropPatch(file); }
+});
+
+test('mcp_manager_search says so when every hit was filtered out', async () => {
+  const file = tmpPatch();
+  try {
+    const sse = { server: { name: 'ai.x/sse', version: '1.0.0', description: 'd', remotes: [{ type: 'sse', url: 'https://x/sse' }] }, _meta: {} };
+    const tool = toolNamed(file, 'mcp_manager_search', { search: stubSearch([sse]) });
+    const out = await tool.execute({ query: 'x' }, {});
+    assert.match(out.text, /no installable registry entries/);
+  } finally { dropPatch(file); }
+});
+
+test('mcp_manager_search names the credentials still to be filled', async () => {
+  const file = tmpPatch();
+  try {
+    const needsKey = {
+      server: {
+        name: 'ai.x/needs-key', version: '1.0.0', description: 'd',
+        packages: [{ registryType: 'npm', identifier: 'needs-key', version: '1.0.0', transport: { type: 'stdio' }, environmentVariables: [{ name: 'API_KEY', isRequired: true, isSecret: true }] }],
+      },
+      _meta: {},
+    };
+    const tool = toolNamed(file, 'mcp_manager_search', { search: stubSearch([needsKey]) });
+    const out = await tool.execute({ query: 'key' }, {});
+    assert.match(out.text, /needs credentials: API_KEY/);
+  } finally { dropPatch(file); }
+});
+
+test('mcp_manager_search flags a server that is already registered', async () => {
+  const file = tmpPatch();
+  try {
+    const tool = toolNamed(file, 'mcp_manager_search', { search: stubSearch([{
+      server: { name: 'ai.x/alpha', version: '2.0.0', description: 'd', packages: [{ registryType: 'npm', identifier: 'alpha-mcp', version: '2.0.0', transport: { type: 'stdio' } }] },
+      _meta: {},
+    }]) });
+    const out = await tool.execute({ query: 'alpha' }, {});
+    assert.match(out.text, /installed as mcp-alpha/);
+    // The fixture's alpha row pins nothing, so the drift must say so rather than
+    // claim it is up to date.
+    assert.match(out.text, /cannot be compared/);
+  } finally { dropPatch(file); }
+});
+
+test('mcp_manager_add with source=registry dry-runs, then writes the mapped row', async () => {
+  const file = tmpPatch();
+  try {
+    const add = toolNamed(file, 'mcp_manager_add', { get: stubGet(REGISTRY_ENTRY.server) });
+    const dry = await add.execute({ input: 'ai.ankimcp/anki-mcp-server', source: 'registry' }, {});
+    assert.match(dry.text, /DRY RUN/);
+    assert.match(dry.text, /anki-mcp-server@0\.27\.0/);
+    assert.ok(!fs.readFileSync(file, 'utf8').includes('anki-mcp-server'), 'dry run writes nothing');
+
+    const written = await add.execute({ input: 'ai.ankimcp/anki-mcp-server', source: 'registry', confirm: true }, {});
+    assert.match(written.text, /written/);
+    assert.match(written.text, /probe OK: 3 tools/);
+    assert.equal(findRow(fs.readFileSync(file, 'utf8'), 'mcp-anki-mcp-server').kind, 'insert-row');
+  } finally { dropPatch(file); }
+});
+
+test('mcp_manager_add with source=registry surfaces the credential gap as a warning', async () => {
+  const file = tmpPatch();
+  try {
+    const needsKey = {
+      name: 'ai.x/needs-key', version: '1.0.0', description: 'd',
+      packages: [{ registryType: 'npm', identifier: 'needs-key', version: '1.0.0', transport: { type: 'stdio' }, environmentVariables: [{ name: 'API_KEY', isRequired: true, isSecret: true }] }],
+    };
+    const add = toolNamed(file, 'mcp_manager_add', { get: stubGet(needsKey) });
+    const dry = await add.execute({ input: 'ai.x/needs-key', source: 'registry' }, {});
+    assert.match(dry.text, /warn: needs secret API_KEY/);
+  } finally { dropPatch(file); }
+});
+
+test('mcp_manager_add with source=registry refuses an unknown entry', async () => {
+  const file = tmpPatch();
+  try {
+    const add = toolNamed(file, 'mcp_manager_add', { get: async () => ({ server: undefined, error: 'HTTP 404', fromCache: false }) });
+    const out = await add.execute({ input: 'ai.x/nope', source: 'registry' }, {});
+    assert.match(out.text, /^ERROR: HTTP 404/);
+  } finally { dropPatch(file); }
+});
+
+test('mcp_manager_add with source=registry refuses an uninstallable entry', async () => {
+  const file = tmpPatch();
+  try {
+    const sse = { name: 'ai.x/sse', version: '1.0.0', description: 'd', remotes: [{ type: 'sse', url: 'https://x/sse' }] };
+    const add = toolNamed(file, 'mcp_manager_add', { get: stubGet(sse) });
+    const out = await add.execute({ input: 'ai.x/sse', source: 'registry' }, {});
+    assert.match(out.text, /^ERROR: not installable: sse/);
+  } finally { dropPatch(file); }
+});
+
+test('mcp_manager_add with source=auto is unchanged', async () => {
+  const file = tmpPatch();
+  try {
+    const add = toolNamed(file, 'mcp_manager_add', {});
+    const out = await add.execute({ input: '@upstash/context7-mcp' }, {});
+    assert.match(out.text, /DRY RUN/);
+    assert.match(out.text, /npx/);
+  } finally { dropPatch(file); }
 });

@@ -59,7 +59,7 @@ function assertValidSchema(schema, where) {
 
 test('every tool parameter schema is structurally valid JSON Schema', () => {
   const defs = createToolDefs('C:/nonexistent/cordis.patch.yml');
-  assert.equal(defs.length, 8);
+  assert.equal(defs.length, 9);
   for (const d of defs) {
     assertValidSchema(d.parameters, d.name);
   }
@@ -84,4 +84,23 @@ test('mcp_manager_update declares id/config as strings and confirm as a boolean'
   assert.equal(update.parameters.properties.confirm.type, 'boolean');
   assert.equal(update.parameters.additionalProperties, false);
   assert.equal(update.parameters.required, undefined, 'required-ness is enforced in execute, like the other tools');
+});
+
+test('mcp_manager_search declares query/limit/cursor as primitives', () => {
+  const defs = createToolDefs('C:/nonexistent/cordis.patch.yml');
+  const search = defs.find(d => d.name === 'mcp_manager_search');
+  assert.ok(search, 'the search tool must be registered');
+  assert.equal(search.parameters.properties.query.type, 'string');
+  assert.equal(search.parameters.properties.limit.type, 'number');
+  assert.equal(search.parameters.properties.cursor.type, 'string');
+  assert.equal(search.parameters.additionalProperties, false);
+});
+
+test('mcp_manager_add declares source with enum, never oneOf', () => {
+  const defs = createToolDefs('C:/nonexistent/cordis.patch.yml');
+  const add = defs.find(d => d.name === 'mcp_manager_add');
+  const source = add.parameters.properties.source;
+  assert.deepEqual(source.enum, ['auto', 'registry']);
+  assert.equal(source.oneOf, undefined, 'oneOf over scalars is invalid JSON Schema and breaks every request');
+  assert.equal(source.type, 'string');
 });
