@@ -172,5 +172,6 @@ test('mcp_manager_add refuses a serverName that is already registered', async ()
 
   const out = await add.execute({ input: 'alpha-mcp', confirm: true }, { signal: new AbortController().signal });
   assert.match(out.text, /duplicate serverName: alpha/, out.text);
+  assert.ok(!out.text.includes('candidate failed validation'), 'the reason alone, not the pipeline internals');
   assert.equal(fs.readFileSync(file, 'utf8'), before, 'the live file must be untouched');
 });

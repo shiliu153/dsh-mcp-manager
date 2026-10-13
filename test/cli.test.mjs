@@ -98,6 +98,7 @@ test('add refuses a serverName that is already registered', () => {
     assert.equal(r.status, 1);
     assert.match(r.stderr + r.stdout, /duplicate serverName: alpha/);
     assert.ok(!r.stderr.includes('at applySurgeryAsync'), 'a refusal is reported, not dumped as a crash');
+    assert.ok(!r.stderr.includes('candidate failed validation'), 'the reason alone, not the pipeline internals');
     assert.equal(fs.readFileSync(copy, 'utf8'), fs.readFileSync(sample, 'utf8'), 'the live file is untouched');
   } finally {
     fs.rmSync(copy, { force: true });

@@ -313,7 +313,10 @@ test('POST /add refuses a duplicate serverName and leaves the file alone', async
   const before = fs.readFileSync(file, 'utf8');
   const routes = createRoutes(fakeCtx(), { patchPath: file, probe: stubProbe });
   const res = await post(routeFor(routes, 'POST', '/add'), { input: 'alpha-mcp', confirm: true });
-  assert.match((await res.json()).error.message, /duplicate serverName: alpha/);
+  assert.equal(res.status, 400, 'a refused candidate is a client error, not a server fault');
+  const body = await res.json();
+  assert.equal(body.error.code, 'candidate_rejected');
+  assert.match(body.error.message, /duplicate serverName: alpha/);
   assert.equal(fs.readFileSync(file, 'utf8'), before, 'the live file is untouched');
   fs.rmSync(file + '.candidate', { force: true });
   fs.rmSync(file, { force: true });

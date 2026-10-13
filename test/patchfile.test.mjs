@@ -198,3 +198,30 @@ test('applySurgeryAsync hands preCommit the candidate text and its parsed entrie
   assert.ok(seen.parsed?.entries?.some((e) => e.id === 'mcp-delta'),
     'preCommit cannot verify the config without the parsed entries');
 });
+
+// A candidate the loader cannot parse is worth keeping to look at. One it parses
+// but the gate rejects is not: the file is fine, the content was refused, and
+// the reason is the whole message. Surfacing the pipeline internals ("candidate
+// failed validation (kept at ...)") buried that reason.
+test('a preCommit rejection reports the reason alone and drops the candidate', async () => {
+  const file = tmpPatch(SAMPLE);
+  const before = fs.readFileSync(file, 'utf8');
+  const row = renderEntryRow({
+    id: 'mcp-delta', name: '@deepseek-ai/dsh-mcp-client',
+    config: { serverName: 'delta', transport: 'stdio', command: 'npx' },
+  });
+  await assert.rejects(
+    () => applySurgeryAsync({
+      file,
+      operation: { type: 'appendEntry', row },
+      preCommit: async () => { throw new Error('duplicate serverName: delta'); },
+    }),
+    (e) => {
+      assert.equal(e.message, 'duplicate serverName: delta', 'the reason alone, not the pipeline internals');
+      assert.equal(e.code, 'candidate_rejected');
+      return true;
+    },
+  );
+  assert.equal(fs.readFileSync(file, 'utf8'), before, 'the live file is untouched');
+  assert.ok(!fs.existsSync(file + '.candidate'), 'a well-formed candidate has nothing worth inspecting');
+});

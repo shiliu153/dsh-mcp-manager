@@ -1,6 +1,6 @@
 {
   "name": "@dsh-contrib/dsh-mcp-manager",
-  "version": "0.4.2",
+  "version": "0.4.3",
   "description": "Manage DSH MCP servers: list, probe, install, toggle, remove, rotate credentials.",
   "private": true,
   "type": "module",

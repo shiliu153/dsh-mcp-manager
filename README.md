@@ -155,7 +155,7 @@ reproduces the file exactly, which is what the test suite asserts.
 ## Development
 
 ```sh
-node --test "test/*.test.mjs"   # 178 tests, zero dependencies
+node --test "test/*.test.mjs"   # 179 tests, zero dependencies
 node -e "import('./scripts/check-bundle.mjs').then(m => console.log(m.checkBundle('.')))"
 ```
 
