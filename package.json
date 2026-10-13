@@ -1,6 +1,6 @@
 {
   "name": "@dsh-contrib/dsh-mcp-manager",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Manage DSH MCP servers: list, probe, install, toggle, remove, rotate credentials.",
   "private": true,
   "type": "module",
@@ -8,10 +8,17 @@
   "main": "./index.js",
   "exports": {
     ".": "./index.js",
+    "./client": "./client.js",
     "./package.json": "./package.json",
     "./locale/*.json": "./locale/*.json"
   },
-  "files": ["index.js", "lib/", "cli/", "locale/", "icon.svg", "assets/", "cordis.patch.yml"],
+  "files": ["index.js", "client.js", "lib/", "cli/", "locale/", "icon.svg", "assets/", "cordis.patch.yml"],
   "icon": "./icon.svg",
-  "dsh": { "bundle": { "patch": "./cordis.patch.yml" } }
+  "dsh": {
+    "bundle": { "patch": "./cordis.patch.yml" },
+    "client": {
+      "platform": "web",
+      "inject": ["@deepseek-ai/dsh-client-ui-slots", "@deepseek-ai/dsh-client-locale"]
+    }
+  }
 }

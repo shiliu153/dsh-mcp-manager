@@ -39,6 +39,21 @@ export function checkBundle(dir) {
       if (!meta?.description) errors.push(`${loc} missing meta.description`);
     } catch (e) { errors.push(`${loc} unparsable: ${e.message}`); }
   }
+  // Client half: declaring dsh.client promises a browser module the installer
+  // must ship. Same class of bug as the patch file once being stripped by the
+  // npm files allowlist.
+  if (manifest.dsh?.client) {
+    const clientRel = manifest.exports?.['./client'];
+    if (!clientRel) errors.push('dsh.client is declared but exports["./client"] is missing');
+    else {
+      const clientAbs = path.join(dir, clientRel);
+      if (!fs.existsSync(clientAbs)) errors.push(`missing client file: ${clientRel}`);
+      const files = manifest.files ?? [];
+      const listed = files.some((f) => f === clientRel || f === clientRel.replace(/^\.\//, ''));
+      if (!listed) errors.push(`files allowlist must include the client file (${clientRel}) or installs strip it`);
+    }
+  }
+
   const icon = manifest.icon;
   if (!icon) warnings.push('no icon declared');
   else {

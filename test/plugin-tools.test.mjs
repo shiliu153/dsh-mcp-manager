@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
-import { createToolDefs, name, inject } from '../index.js';
+import { createToolDefs, name, inject, apply } from '../index.js';
 
 const dir = path.dirname(fileURLToPath(import.meta.url));
 const sample = path.join(dir, 'fixtures/patch-sample.yml');
@@ -60,4 +60,30 @@ test('execute captures thrown errors as ERROR text, never rejects', async () => 
   const list = defs.find(d => d.name === 'mcp_manager_list');
   const out = await list.execute({}, { signal: new AbortController().signal });
   assert.ok(out.text.startsWith('ERROR:'));
+});
+
+test('apply registers Fetch routes when a connection service is present', () => {
+  const registered = [];
+  const ctx = {
+    tools: { register: () => () => {} },
+    effect: (fn) => { fn(); return () => {}; },
+    inject: (services, cb) => {
+      assert.deepEqual(services, ['connection']);
+      cb({ connection: { registerFetchRoute: (owner, route) => { registered.push(route); return () => {}; } } });
+    },
+  };
+  apply(ctx);
+  assert.equal(registered.length, 5, `expected the five panel routes, got ${registered.length}`);
+  assert.ok(registered.every((r) => r.path.startsWith('/api/dsh-mcp-manager/')));
+  assert.ok(registered.some((r) => r.path.endsWith('/servers') && r.methods.includes('GET')));
+  assert.ok(registered.every((r) => r.path.startsWith('/api/')), 'every path must sit under /api');
+});
+
+test('apply stays inert without a connection service', () => {
+  const ctx = {
+    tools: { register: () => () => {} },
+    effect: () => () => {},
+    inject: () => { /* service absent: the callback never runs */ },
+  };
+  assert.doesNotThrow(() => apply(ctx));
 });
