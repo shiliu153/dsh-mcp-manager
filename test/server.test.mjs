@@ -172,3 +172,46 @@ test('POST /probe answers 200 with an error field when the handshake fails', asy
   assert.equal(typeof body.error, 'string');
   assert.ok(body.error.length > 0);
 });
+
+// The add route probes the new server. Real probing spawns npx and downloads a
+// package, so these tests inject a stub: the seam exists for exactly this.
+const stubProbe = async () => ({ ok: true, toolCount: 3, tools: ['a', 'b', 'c'] });
+
+test('POST /add dry-runs by default and does not touch the file', async () => {
+  const file = copyFixture();
+  const before = fs.readFileSync(file, 'utf8');
+  const beforeMtime = fs.statSync(file).mtimeMs;
+  const routes = createRoutes(fakeCtx(), { patchPath: file, probe: stubProbe });
+  const res = await post(routeFor(routes, 'POST', '/add'), { input: '@modelcontextprotocol/server-everything' });
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.equal(typeof body.preview, 'string');
+  assert.match(body.preview, /- id: /);
+  assert.match(body.preview, /dsh-mcp-client/);
+  assert.equal(body.written, undefined, 'dry run must not report a write');
+  assert.equal(fs.readFileSync(file, 'utf8'), before, 'file content unchanged');
+  assert.equal(fs.statSync(file).mtimeMs, beforeMtime, 'mtime unchanged');
+});
+
+test('POST /add rejects a missing input', async () => {
+  const routes = createRoutes(fakeCtx(), { patchPath: fixture, probe: stubProbe });
+  const res = await post(routeFor(routes, 'POST', '/add'), {});
+  assert.equal(res.status, 400);
+  assert.equal((await res.json()).error.code, 'bad_request');
+});
+
+test('POST /add with confirm writes the entry and reports the probe', async () => {
+  const file = copyFixture();
+  const routes = createRoutes(fakeCtx(), { patchPath: file, probe: stubProbe });
+  const res = await post(routeFor(routes, 'POST', '/add'), {
+    input: '@modelcontextprotocol/server-everything', confirm: true,
+  });
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.equal(body.written, true);
+  assert.ok(body.backup.endsWith('.bak'));
+  assert.deepEqual(body.probe, { ok: true, toolCount: 3 });
+  const text = fs.readFileSync(file, 'utf8');
+  assert.match(text, /server-everything/);
+  assert.match(text, /# keep this comment/, 'existing comments kept');
+});
