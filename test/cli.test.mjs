@@ -70,14 +70,24 @@ test('add dry-run prints entry and does not write', () => {
   } finally { fs.rmSync(copy, { force: true }); }
 });
 
-test('add --yes writes the entry', () => {
+test('add --yes writes a row the plugin can read back with its config', () => {
   const copy = path.join(dir, 'tmp-add2.yml');
   fs.copyFileSync(sample, copy);
   try {
     const r = run(['add', 'foo-mcp', '--file', copy, '--yes', '--no-probe']);
     assert.equal(r.status, 0, r.stderr || r.stdout);
-    assert.ok(fs.readFileSync(copy, 'utf8').includes('foo-mcp'));
-  } finally { fs.rmSync(copy, { force: true }); }
+    const text = fs.readFileSync(copy, 'utf8');
+    assert.equal(findRow(text, 'mcp-foo').kind, 'insert-row', 'the loader only mounts insert rows');
+
+    const j = JSON.parse(run(['list', '--file', copy, '--json']).stdout);
+    const entry = j.entries.find(e => e.id === 'mcp-foo');
+    assert.ok(entry, 'the written entry must be readable back');
+    assert.equal(entry.config.serverName, 'foo');
+    assert.deepEqual(entry.config.args, ['-y', 'foo-mcp']);
+  } finally {
+    fs.rmSync(copy, { force: true });
+    fs.rmSync(copy + '.bak', { force: true });
+  }
 });
 
 test('usage error exits 2', () => {

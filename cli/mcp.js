@@ -12,12 +12,12 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
-import { parseTopBlocks, findRow, readConfigBlock } from '../lib/surgery.js';
+import { parseTopBlocks, findRow, readConfigBlock, renderInsertBlock } from '../lib/surgery.js';
 import { validateEntry, SERVER_NAME_RE } from '../lib/rules.js';
 import { isMcpClientRow, maskEntry } from '../lib/rows.js';
 import { loadPatchStructured } from '../lib/dump.js';
 import { probeConfig } from '../lib/probe.js';
-import { defaultPatchPath, renderEntryRow, applySurgery, applySurgeryAsync } from '../lib/patchfile.js';
+import { defaultPatchPath, renderEntryRow, applySurgery, applySurgeryAsync, readBackEntry } from '../lib/patchfile.js';
 import { prepareUpdate, applyUpdate, toPanelView } from '../lib/update.js';
 import { resolveInput } from '../lib/resolve.js';
 
@@ -118,7 +118,7 @@ switch (cmd) {
     if (needsInput?.length) { for (const n of needsInput) console.log(`needs input: ${n}`); process.exit(1); }
     const row = renderEntryRow(entry);
     console.log('--- entry to be written ---');
-    console.log([`- id: ${row.id}`, `  name: '${row.name}'`, ...row.configLines.map(l => l)].join('\n'));
+    console.log(renderInsertBlock(row).join('\n'));
     if (!flags.yes) {
       console.log('--- dry run: nothing written. Re-run with --yes to write. ---');
       break;
@@ -126,8 +126,11 @@ switch (cmd) {
     const r = await applySurgeryAsync({ file: FILE, operation: { type: 'appendEntry', row } });
     console.log(`written (backup: ${r.backupPath})`);
     if (flags.noProbe) break;
+    // Verify what landed, never the object we just built.
+    const back = await readBackEntry(FILE, row.id);
+    if (!back.ok) { console.error(`verify FAIL: ${back.error}`); process.exit(1); }
     console.log('probing...');
-    const pr = await probeConfig(entry.config, { timeoutMs: (flags.timeout ?? 60) * 1000 });
+    const pr = await probeConfig(back.config, { timeoutMs: (flags.timeout ?? 60) * 1000 });
     console.log(pr.ok ? `probe OK: ${pr.toolCount} tools` : `probe FAIL: ${pr.error}`);
     process.exit(pr.ok ? 0 : 1);
     break;

@@ -208,7 +208,9 @@ test('POST /add rejects a missing input', async () => {
 
 test('POST /add with confirm writes the entry and reports the probe', async () => {
   const file = copyFixture();
-  const routes = createRoutes(fakeCtx(), { patchPath: file, probe: stubProbe });
+  const seen = [];
+  const probe = async (config) => { seen.push(config); return { ok: true, toolCount: 3, tools: ['a', 'b', 'c'] }; };
+  const routes = createRoutes(fakeCtx(), { patchPath: file, probe });
   const res = await post(routeFor(routes, 'POST', '/add'), {
     input: '@modelcontextprotocol/server-everything', confirm: true,
   });
@@ -220,6 +222,11 @@ test('POST /add with confirm writes the entry and reports the probe', async () =
   const text = fs.readFileSync(file, 'utf8');
   assert.match(text, /server-everything/);
   assert.match(text, /# keep this comment/, 'existing comments kept');
+
+  // The probe must run against what landed on disk, not the in-memory entry.
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0].serverName, 'everything', 'the probe must see the persisted config');
+  assert.deepEqual(seen[0].args, ['-y', '@modelcontextprotocol/server-everything']);
 });
 
 // ---- the edit route: same fixture, same throwaway-copy discipline ----

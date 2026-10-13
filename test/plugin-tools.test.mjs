@@ -5,6 +5,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createToolDefs, name, inject, apply } from '../index.js';
+import { findRow } from '../lib/surgery.js';
+import { loadPatchText } from '../lib/dump.js';
 
 const dir = path.dirname(fileURLToPath(import.meta.url));
 const sample = path.join(dir, 'fixtures/patch-sample.yml');
@@ -136,4 +138,27 @@ test('mcp_manager_update keeps the row\'s !!js expression when fed a placeholder
     .execute({ id: 'mcp-gamma', config: view.configText, confirm: true }, { signal: new AbortController().signal });
   assert.match(out.text, /updated mcp-gamma/);
   assert.ok(fs.readFileSync(file, 'utf8').includes("GAMMA_TOKEN: !!js require('fs')"), 'the expression came back verbatim');
+});
+
+// The add path used to probe the in-memory entry it had just built, so it
+// reported `probe OK` while the file held a flat, unmountable row. The probe
+// must see what the file actually holds.
+test('mcp_manager_add probes the persisted row, not the in-memory entry', async () => {
+  const file = tmpPatch();
+  const seen = [];
+  const probe = async (config) => { seen.push(config); return { ok: true, toolCount: 2, tools: [] }; };
+  const add = createToolDefs(file, { probe }).find((d) => d.name === 'mcp_manager_add');
+
+  const out = await add.execute({ input: '@upstash/context7-mcp', confirm: true }, { signal: new AbortController().signal });
+  assert.match(out.text, /written/);
+
+  const text = fs.readFileSync(file, 'utf8');
+  assert.equal(findRow(text, 'mcp-context7').kind, 'insert-row', 'the loader only mounts insert rows');
+  const { entries } = await loadPatchText(text);
+  const persisted = entries.find((e) => e.id === 'mcp-context7');
+  assert.ok(persisted, 'the written entry must be readable back');
+
+  assert.equal(seen.length, 1, 'the write path probes exactly once');
+  assert.deepEqual(seen[0], persisted.config, 'the probe must see the persisted config');
+  assert.equal(seen[0].serverName, 'context7');
 });

@@ -4,6 +4,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { applySurgery, applySurgeryAsync, renderEntryRow } from '../lib/patchfile.js';
+import { findRow } from '../lib/surgery.js';
+import { loadPatchText } from '../lib/dump.js';
 
 function tmpPatch(content) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dshmcp-'));
@@ -138,4 +140,25 @@ test('applySurgeryAsync applies the replaceConfig operation', async () => {
   assert.ok(text.includes('serverName: gamma'));
   assert.ok(!text.includes('GAMMA_TOKEN'));
   assert.ok(text.includes('mcp-alpha') && text.includes('mcp-beta'), 'siblings untouched');
+});
+
+// What `add` is for: the row must be mountable by the harness loader AND
+// readable back by this plugin's own reader. Asserting only that the text
+// contains `serverName: delta` let a flat, unmountable entry pass unnoticed.
+test('an appended row is mountable and survives a read-back with its config', async () => {
+  const file = tmpPatch(SAMPLE);
+  const row = renderEntryRow({
+    id: 'mcp-delta', name: '@deepseek-ai/dsh-mcp-client',
+    config: { serverName: 'delta', transport: 'stdio', command: 'npx', args: ['-y', 'delta-mcp'] },
+  });
+  await applySurgeryAsync({ file, operation: { type: 'appendEntry', row } });
+  const text = fs.readFileSync(file, 'utf8');
+
+  assert.equal(findRow(text, 'mcp-delta').kind, 'insert-row', 'a bare entry matching no row is skipped by the loader');
+
+  const { entries } = await loadPatchText(text);
+  const entry = entries.find((e) => e.id === 'mcp-delta');
+  assert.ok(entry, 'the appended entry must be readable back');
+  assert.equal(entry.config.serverName, 'delta');
+  assert.deepEqual(entry.config.args, ['-y', 'delta-mcp']);
 });

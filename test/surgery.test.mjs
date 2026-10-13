@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { parseTopBlocks, findRow, removeEntry, setDisabled, appendEntry, readConfigBlock, replaceConfigBlock } from '../lib/surgery.js';
+import * as surgery from '../lib/surgery.js';
 
 const dir = path.dirname(fileURLToPath(import.meta.url));
 const sample = readFileSync(path.join(dir, 'fixtures/patch-sample.yml'), 'utf8');
@@ -59,18 +60,42 @@ test('setDisabled rewrites existing value', () => {
   assert.ok(!lines.some(l => /disabled:\s*true/.test(l)));
 });
 
-test('appendEntry appends top-level bare entry with blank line separator', () => {
+// The Loader mounts a row only when it sits inside an insert list. A bare
+// top-level entry targets an EXISTING row by id, and one that matches no row is
+// warned about and skipped -- so a freshly added server must be inserted.
+test('appendEntry writes the new row inside an insert list, never as a bare entry', () => {
   const out = appendEntry(sample, { id: 'mcp-delta', name: '@deepseek-ai/dsh-mcp-client', configLines: ['config:', '  serverName: delta', '  transport: stdio', '  command: npx'] });
-  const blocks = parseTopBlocks(out);
-  assert.equal(blocks.length, 3);
-  assert.equal(blocks[2].id, 'mcp-delta');
-  assert.ok(out.includes('serverName: delta'));
+  assert.equal(findRow(out, 'mcp-delta').kind, 'insert-row');
+  assert.match(out, /^ {4}- id: mcp-delta$/m);
+  assert.match(out, /^ {6}config:$/m, 'config: is a row key, at row indent + 2');
+  assert.match(out, /^ {8}serverName: delta$/m, 'the config fields nest under config:');
+  assert.ok(out.startsWith(sample.replace(/\s*$/, '')), 'existing bytes stay untouched');
+});
+
+test('appendEntry creates an insert list when the file has none', () => {
+  const bareOnly = '- id: mcp-gamma\n  name: x\n  config:\n    serverName: gamma\n';
+  const out = appendEntry(bareOnly, { id: 'mcp-delta', name: 'n', configLines: ['config:', '  serverName: delta'] });
+  assert.equal(findRow(out, 'mcp-delta').kind, 'insert-row');
+  assert.equal(parseTopBlocks(out).filter(b => b.kind === 'insert').length, 1);
+  assert.equal(findRow(out, 'mcp-gamma').kind, 'bare', 'the bare entry must not absorb the new row');
 });
 
 test('parseTopBlocks ignores indented rows as top-level', () => {
   const out = appendEntry(sample, { id: 'mcp-delta', name: 'x', configLines: [] });
-  const blocks = parseTopBlocks(out);
-  assert.equal(blocks.filter(b => b.kind === 'insert').length, 1);   // 行内 `    - id:` 不算顶层
+  // The fixture's own insert block must still expose exactly its two rows: the
+  // appended block's rows must never be attributed to it.
+  assert.deepEqual(parseTopBlocks(out)[0].rows.map(r => r.id), ['mcp-alpha', 'mcp-beta']);
+});
+
+// Every surface shows a preview before writing. It has to be rendered from the
+// same code that writes, or the user approves one shape and gets another -- the
+// duplication is what let the flat-entry bug hide in the first place.
+test('the preview renders exactly the block appendEntry writes', () => {
+  const row = { id: 'mcp-delta', name: '@deepseek-ai/dsh-mcp-client', disabled: false, configLines: ['config:', '  serverName: delta', '  transport: stdio'] };
+  const block = surgery.renderInsertBlock(row).join('\n');
+  assert.match(block, /^ {4}- id: mcp-delta$/m);
+  const out = appendEntry('- id: mcp-gamma\n  name: x\n', row);
+  assert.ok(out.endsWith('\n\n' + block + '\n'), 'the preview must be exactly the block that gets appended');
 });
 
 test('a CRLF patch file parses and edits exactly like an LF one', () => {
