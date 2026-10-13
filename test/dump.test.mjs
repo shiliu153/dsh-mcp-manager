@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, readdirSync } from 'node:fs';
+import { readFileSync, readdirSync, mkdtempSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import os from 'node:os';
 import path from 'node:path';
@@ -23,11 +23,13 @@ test('throws on unparsable file', async () => {
 
 test('loadPatchText parses text without leaving a temp file behind', async () => {
   const text = readFileSync(path.join(dir, 'fixtures/patch-sample.yml'), 'utf8');
-  const before = readdirSync(os.tmpdir()).filter((f) => f.startsWith('dsh-patch-'));
-  const { entries } = await loadPatchText(text);
+  // A private scratch dir: the test files run in parallel processes, so a
+  // shared os.tmpdir() listing would race against the other suite's temp files.
+  const scratch = mkdtempSync(path.join(os.tmpdir(), 'dsh-dump-'));
+  const { entries } = await loadPatchText(text, { dir: scratch });
   assert.deepEqual(entries.map((e) => e.id), ['mcp-alpha', 'mcp-beta', 'mcp-gamma']);
   assert.equal(entries[0].config.serverName, 'alpha');
-  assert.deepEqual(readdirSync(os.tmpdir()).filter((f) => f.startsWith('dsh-patch-')), before, 'no temp file is left');
+  assert.deepEqual(readdirSync(scratch), [], 'no temp file is left');
 });
 
 test('loadPatchText rejects text the official loader cannot parse', async () => {
